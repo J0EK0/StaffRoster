@@ -1,0 +1,53 @@
+# macOS / Windows
+.DS_Store
+Thumbs.db
+
+# Editor and local tool state
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude/Codex local-only settings
+.claude/settings.local.json
+.Codex/
+
+# R / analysis scratch files
+.Rhistory
+**/.Rhistory
+.RData
+.Rproj.user/
+
+# Logs and runtime noise
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local env files
+.env
+.env.*
+
+# Dependency/build output if someone experiments locally
+node_modules/
+dist/
+build/
+coverage/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Generated exports / local screenshots
+*.xlsx
+*.xls
+~$*.xlsx
+screenshot*.png
+Screenshot*.png
+
+# Local-only agent notes
+AGENTS.md
+CLAUDE.md
