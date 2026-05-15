@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>護理單位排班系統</title>
+<link rel="stylesheet" href="css/style.css?v=40">
+</head>
+<body style="background-color: rgb(255, 255, 255)">
+
+<header class="topbar">
+  <div class="title">護理單位排班系統</div>
+  <div class="month-nav">
+    <button id="btn-prev-month" title="上個月">◀</button>
+    <select id="year-select"></select>
+    <select id="month-select"></select>
+    <button id="btn-next-month" title="下個月">▶</button>
+    <button id="btn-today">今天</button>
+  </div>
+  <div class="workflow-steps">
+    <div class="step-indicator" aria-hidden="true"></div>
+    <button id="btn-set-prefs" class="step"><span class="step-num">1</span><span class="step-label">設定偏好</span></button>
+    <span class="step-arrow">›</span>
+    <button id="btn-init-draft" class="step"><span class="step-num">2</span><span class="step-label">產生底稿</span></button>
+    <span class="step-arrow">›</span>
+    <button id="btn-auto-fill" class="step"><span class="step-num">3</span><span class="step-label">下一步修班</span></button>
+    <span class="step-arrow">›</span>
+    <button id="btn-export" class="step"><span class="step-num">4</span><span class="step-label">匯出 Excel</span></button>
+  </div>
+  <div class="actions">
+    <button id="btn-rotation-modal" type="button" title="設定排班底稿">底稿</button>
+    <button id="btn-violations-chip" class="violations-chip chip-idle" type="button" title="規則狀態（自動檢查）"><span class="chip-dot"></span><span class="chip-label">規則未檢查</span></button>
+    <div class="more-menu">
+      <button id="btn-more-menu" class="more-btn" type="button" title="更多">⋯</button>
+      <div id="more-menu-pop" class="more-menu-pop hidden">
+        <button id="btn-clear-schedule">清空排班內容</button>
+        <button id="btn-reset-month">清空偏好與版面</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section class="legend">
+  <span class="hint">點擊格子 = 選班別 ／ 點姓名旁 ⚙ = 設定該員限制 ／ 拖曳姓名 = 重排</span>
+  <span class="legend-key"><span class="lc-weekday"></span>平日</span>
+  <span class="legend-key"><span class="lc-weekend"></span>週六/日</span>
+  <span class="legend-key"><span class="lc-holiday"></span>國定假日</span>
+  <div id="quick-fill-toolbar" class="quick-fill-toolbar" aria-label="快速填入班別"></div>
+  <button id="btn-toggle-stats" class="stats-toggle" type="button" title="收起 / 展開右側統計欄">
+    <span class="chev">◂</span><span class="lbl">收起統計</span>
+  </button>
+  <button id="btn-open-tweaks" class="stats-toggle tweaks-toggle" type="button" title="顯示選項">
+    <span class="dot"></span><span class="lbl">顯示選項</span>
+  </button>
+</section>
+
+<main>
+  <div id="schedule-table-wrap" class="table-wrap">
+    <table id="schedule-table"></table>
+  </div>
+</main>
+
+<aside id="prefs-drawer" class="prefs-drawer hidden" aria-hidden="true">
+  <header class="drawer-head">
+    <span class="drawer-title">設定偏好</span>
+    <span class="drawer-sub" id="prefs-count"></span>
+    <button class="drawer-close" id="btn-prefs-close" title="關閉">×</button>
+  </header>
+  <div class="drawer-body">
+    <p class="prefs-hint">點表格任一格設定「想上的班」或「請假」，偏好會自動存起來。按 <b>② 產生底稿</b> 會以這些偏好為基礎填入班表。</p>
+    <div id="prefs-list" class="prefs-list"></div>
+  </div>
+</aside>
+
+<div id="prefs-banner" class="prefs-banner hidden">
+  <span class="banner-step">①</span>
+  <strong>設定偏好中</strong>
+  <span class="banner-hint">點任一格設定請假/想上的班。完成後按 ② 產生底稿。</span>
+  <button id="btn-banner-next" type="button">下一步 › 產生底稿</button>
+</div>
+
+<aside id="violations-drawer" class="violations-drawer hidden" aria-hidden="true">
+  <header class="drawer-head">
+    <span class="drawer-title">規則違規</span>
+    <button class="drawer-close" id="btn-violations-close" title="關閉">×</button>
+  </header>
+  <div class="drawer-body">
+    <div id="violations" class="violations"></div>
+  </div>
+</aside>
+
+<!-- 底稿 modal -->
+<div id="rotation-modal" class="modal hidden">
+  <div class="modal-bg"></div>
+  <div class="modal-body rotation-modal-body">
+    <div class="modal-header">
+      <span id="rotation-modal-title">底稿設定</span>
+      <button class="modal-close" id="btn-rotation-close">×</button>
+    </div>
+    <div class="modal-content" id="rotation-modal-content">
+      <div class="rotation-section">
+        <h3>平日</h3>
+        <div id="rotation-table-weekday"></div>
+      </div>
+      <div class="rotation-section">
+        <h3>普通假日（週六／週日）</h3>
+        <div id="rotation-table-regular"></div>
+      </div>
+      <div class="rotation-section">
+        <h3>國定／連假</h3>
+        <div id="rotation-table-national"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="btn-rotation-save" class="primary">儲存</button>
+      <button id="btn-rotation-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 個人限制 modal -->
+<div id="constraint-modal" class="modal hidden">
+  <div class="modal-bg"></div>
+  <div class="modal-body">
+    <div class="modal-header">
+      <span id="constraint-modal-title">設定限制</span>
+      <button class="modal-close" id="btn-modal-close">×</button>
+    </div>
+    <div class="modal-content" id="constraint-modal-content"></div>
+    <div class="modal-footer">
+      <button id="btn-constraint-save" class="primary">儲存</button>
+      <button id="btn-constraint-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 班別下拉 popover -->
+<div id="shift-popover" class="popover hidden"></div>
+
+<!-- Tweaks 面板 -->
+<div id="tweaks-panel" class="tweaks-panel hidden" aria-hidden="true">
+  <div class="tweaks-head">
+    <span class="tweaks-title">顯示選項</span>
+    <button class="tweaks-close" id="btn-tweaks-close" title="關閉">×</button>
+  </div>
+  <div class="tweaks-body">
+
+    <div class="tweak-section">
+      <div class="tweak-label">白班顯示</div>
+      <div class="tweak-hint">把白班淡化或藏起，整月「誰幾號上特殊班」會更明顯</div>
+      <div class="seg" data-tweak="white">
+        <button data-value="full">完整</button>
+        <button data-value="faded">淡化</button>
+        <button data-value="hidden">隱藏</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- 改用 xlsx-js-style 這個 fork — 社群版 SheetJS 不會寫入 cell.s 樣式，這個 fork 才會 -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="js/data.js?v=40"></script>
+<script src="js/calendar.js?v=40"></script>
+<script src="js/staff.js?v=40"></script>
+<script src="js/constraints.js?v=40"></script>
+<script src="js/validator.js?v=40"></script>
+<script src="js/scheduler.js?v=40"></script>
+<script src="js/export.js?v=40"></script>
+<script src="js/app.js?v=40"></script>
+<script src="js/tweaks.js?v=40"></script>
+<script src="js/ui-extras.js?v=40"></script>
+<script src="js/prefs-stage.js?v=40"></script>
+</body>
+</html>
