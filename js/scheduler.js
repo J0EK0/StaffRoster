@@ -732,16 +732,17 @@ const Scheduler = (() => {
                 + Math.abs(q['國'] - T['國']);
     });
 
+    const weekdaysOnly = days.filter(d => d.dow >= 1 && d.dow <= 5 && !d.isHoliday);
     const rotN = staff.filter(s => !s.fixedShift && !(s.forbidden||[]).includes('N'));
     const ns = rotN.map(s => {
       let n = 0;
-      days.forEach(d => { if (workCode(assignments[s.id][d.date]) === 'N') n++; });
+      weekdaysOnly.forEach(d => { if (workCode(assignments[s.id][d.date]) === 'N') n++; });
       return n;
     });
     const rotE = staff.filter(s => !s.fixedShift && !(s.forbidden||[]).includes('E'));
     const es = rotE.map(s => {
       let n = 0;
-      days.forEach(d => { if (workCode(assignments[s.id][d.date]) === 'E') n++; });
+      weekdaysOnly.forEach(d => { if (workCode(assignments[s.id][d.date]) === 'E') n++; });
       return n;
     });
 
@@ -773,7 +774,7 @@ const Scheduler = (() => {
          + 200  * cov.dups      // 每日特殊班重複
          + 50  * dailyOffOver
          + 10  * (stddev(ns) + stddev(es))
-         + 5   * missNE;
+         + 100 * missNE;
   }
 
   function quotaDeviation(assignments, staff, days) {
@@ -3426,15 +3427,17 @@ const Scheduler = (() => {
     });
   }
 
-  // 補 N/E 軟性目標：每位輪 N/E 員工至少 1N1E
+  // 補 N/E 目標：每位輪 N/E 員工平日至少 1N1E
   function ensureMonthlyNE(assignments, staff, days, locked, diagnostics) {
     const rotN = staff.filter(s => !s.fixedShift && !(s.forbidden||[]).includes('N'));
     const rotE = staff.filter(s => !s.fixedShift && !(s.forbidden||[]).includes('E'));
+    const weekdays = days.filter(d => d.dow >= 1 && d.dow <= 5 && !d.isHoliday);
 
     const countCode = (staffId, code) => {
       let n = 0;
-      days.forEach(d => {
-        if (assignments[staffId][d.date] === code) n++;
+      weekdays.forEach(d => {
+        const cur = assignments[staffId][d.date];
+        if (cur === code || workCode(cur) === code) n++;
       });
       return n;
     };
@@ -3442,14 +3445,14 @@ const Scheduler = (() => {
     const ensure = (s, code) => {
       if (countCode(s.id, code) > 0) return true;
 
-      // 找一天：該員工是 '白'，且該天該班別有人擔任，跟那人 swap
-      for (let i = 0; i < days.length; i++) {
-        const d = days[i];
+      // 只在平日找：該員工是 '白'，且該天該班別有人擔任，跟那人 swap
+      for (let i = 0; i < weekdays.length; i++) {
+        const d = weekdays[i];
         if (assignments[s.id][d.date] !== '白') continue;
         if (isLocked(locked, s.id, d.date)) continue;
         // 找該天上 code 的另一名員工
         const target = staff.find(x =>
-          x.id !== s.id && !x.fixedShift && assignments[x.id][d.date] === code);
+          x.id !== s.id && !x.fixedShift && workCode(assignments[x.id][d.date]) === code);
         if (!target) continue;
         if (isLocked(locked, target.id, d.date)) continue;
         if (countCode(target.id, code) <= 1) continue;
@@ -3465,14 +3468,14 @@ const Scheduler = (() => {
 
     rotN.forEach(s => {
       if (!ensure(s, 'N')) {
-        addDiagnostic(diagnostics, 'no-monthly-N', s, null,
-          `${s.name} 該月未排到 N（軟性目標）`);
+        addDiagnostic(diagnostics, 'no-weekday-N', s, null,
+          `${s.name} 平日未排到 N（大夜）`);
       }
     });
     rotE.forEach(s => {
       if (!ensure(s, 'E')) {
-        addDiagnostic(diagnostics, 'no-monthly-E', s, null,
-          `${s.name} 該月未排到 E（軟性目標）`);
+        addDiagnostic(diagnostics, 'no-weekday-E', s, null,
+          `${s.name} 平日未排到 E（小夜）`);
       }
     });
   }
