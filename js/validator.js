@@ -126,11 +126,68 @@ const Validator = (() => {
     });
   }
 
-  // 規則 5: 月配額 — 每位員工該月：
-  //   休數 = 該月週六總數
-  //   例數 = 該月週日總數
+  // 規則 5a: 週配額 — 每位員工每週：
+  //   休數 = 該週週六數，例數 = 該週週日數
+  //   特殊：第一週無平日時，該六/日有上班者允許遞延至第二週
+  function checkWeeklyRestQuota(schedule, staff, errs) {
+    const { days, assignments } = schedule;
+    const weeks = getMonthWeeks(days);
+
+    staff.forEach(s => {
+      if (s.fixedShift) return;
+
+      // 計算每週有效目標（含特殊情況遞延）
+      const weekTargets = weeks.map(week => ({
+        target休: week.filter(d => d.dow === 6).length,
+        target例: week.filter(d => d.dow === 0).length,
+      }));
+
+      if (weeks.length >= 2) {
+        const week1 = weeks[0];
+        const week1HasWeekday = week1.some(d => d.dow >= 1 && d.dow <= 5);
+        if (!week1HasWeekday) {
+          let overflow休 = 0, overflow例 = 0;
+          week1.forEach(d => {
+            const c = getCode(assignments, s.id, d.date);
+            if (d.dow === 6 && c && isWork(c)) overflow休++;
+            if (d.dow === 0 && c && isWork(c)) overflow例++;
+          });
+          weekTargets[0].target休 -= overflow休;
+          weekTargets[0].target例 -= overflow例;
+          weekTargets[1].target休 += overflow休;
+          weekTargets[1].target例 += overflow例;
+        }
+      }
+
+      weeks.forEach((week, wi) => {
+        const { target休, target例 } = weekTargets[wi];
+        let n休 = 0, n例 = 0;
+        week.forEach(d => {
+          const c = getCode(assignments, s.id, d.date);
+          if (restQuotaCode(c) === '休') n休++;
+          if (c === '例') n例++;
+        });
+        if (n休 !== target休) {
+          errs.push({
+            type:'wrong-weekly-休-quota',
+            staffId:s.id, name:s.name,
+            msg:`${s.name} ${week[0].date} 週「休」${n休} 個 (應為 ${target休})`
+          });
+        }
+        if (n例 !== target例) {
+          errs.push({
+            type:'wrong-weekly-例-quota',
+            staffId:s.id, name:s.name,
+            msg:`${s.name} ${week[0].date} 週「例」${n例} 個 (應為 ${target例})`
+          });
+        }
+      });
+    });
+  }
+
+  // 規則 5b: 月配額 — 每位員工該月：
   //   國數 = 該月國定假日總數
-  // (固定班員工以 fixedShift 為主，目標仍同；但用戶要求暫時略過固定班的檢查)
+  //   (休/例 改由週配額 checkWeeklyRestQuota 驗證；target休/例 保留供圓圈班安全網使用)
   function checkMonthlyRestQuota(schedule, staff, errs) {
     const { days, assignments } = schedule;
     const target休 = days.filter(d => d.dow === 6).length;
@@ -139,27 +196,11 @@ const Validator = (() => {
 
     staff.forEach(s => {
       if (s.fixedShift) return;
-      let n例 = 0, n休 = 0, n國 = 0;
+      let n國 = 0;
       days.forEach(d => {
         const c = getCode(assignments, s.id, d.date);
-        if (c === '例') n例++;
-        if (restQuotaCode(c) === '休') n休++;
         if (c === '國') n國++;
       });
-      if (n例 !== target例) {
-        errs.push({
-          type:'wrong-例-quota',
-          staffId:s.id, name:s.name,
-          msg:`${s.name} 該月「例」${n例} 個 (應為 ${target例} = 該月週日數)`
-        });
-      }
-      if (n休 !== target休) {
-        errs.push({
-          type:'wrong-休-quota',
-          staffId:s.id, name:s.name,
-          msg:`${s.name} 該月「休」${n休} 個 (應為 ${target休} = 該月週六數，休* 計入休)`
-        });
-      }
       if (n國 !== target國) {
         errs.push({
           type:'wrong-國-quota',
@@ -383,7 +424,8 @@ const Validator = (() => {
     checkNNotFollowedByTriangle(schedule, staff, errs);
     checkEvening3End(schedule, staff, errs);
     checkMaxConsecutive(schedule, staff, errs);
-    checkMonthlyRestQuota(schedule, staff, errs); /* 含國的月配額檢查 */
+    checkWeeklyRestQuota(schedule, staff, errs);  /* 休/例週配額（取代月配額）*/
+    checkMonthlyRestQuota(schedule, staff, errs); /* 國的月配額 + 圓圈班 */
     checkDailyCoverage(schedule, staff, errs);
     checkMonthlyNE(schedule, staff, errs); /* 軟性，已 noop */
     checkForbidden(schedule, staff, errs);
