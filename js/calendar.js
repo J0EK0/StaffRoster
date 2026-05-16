@@ -76,6 +76,20 @@ function buildMonthStructure(y, m, customHolidays) {
   return days;
 }
 
+// 將一個月的 days 陣列按「週一到週日」分週
+// 月初不是週一時，第一週為不完整週（開始日到第一個週日）
+// 月末不是週日時，最後一週也可能是不完整週
+function getMonthWeeks(days) {
+  const weeks = [];
+  let current = [];
+  for (const d of days) {
+    current.push(d);
+    if (d.dow === 0) { weeks.push(current); current = []; }
+  }
+  if (current.length > 0) weeks.push(current);
+  return weeks;
+}
+
 // 取得月份內所有國定假日
 function holidaysInMonth(y, m, customHolidays) {
   const total = daysInMonth(y, m);
