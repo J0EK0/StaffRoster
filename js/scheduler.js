@@ -3101,11 +3101,15 @@ const Scheduler = (() => {
   // token 帳本 helpers
   // ============================================================
 
-  function pickDraftRestShortfallDay(assignments, staff, days, locked, dailyOff, staffMember, code) {
+  // allowedDays 為 null 時搜尋整月；否則只搜尋 allowedDays 內的平日
+  function pickDraftRestShortfallDay(assignments, staff, days, locked, dailyOff, staffMember, code, allowedDays) {
     let best = null;
+    const searchDays = allowedDays || days;
 
-    days.forEach((d, idx) => {
+    searchDays.forEach(d => {
       if (!isWeekday(d)) return;
+      const idx = days.indexOf(d);
+      if (idx < 0) return;
       if (dailyOff[idx] >= MAX_DAILY_LEAVE) return;
       if (isLocked(locked, staffMember.id, d.date)) return;
       if (assignments[staffMember.id][d.date] !== '白') return;
@@ -3120,90 +3124,194 @@ const Scheduler = (() => {
     return best;
   }
 
-  // Z 只在底稿剛產生後使用：補足每位員工缺少的休/例/國 token。
-  // 只從平日白班升 off，且必須遵守當日 off cap；修班階段不再單點補休。
+  // 只在底稿剛產生後使用：補足每位員工缺少的休/例/國 token。
+  // 休/例：週內補充（不可跨週），國：全月補充。
+  // 特殊情況：月份第一週無平日（月 1 日為週六或週日）時，
+  //   若該六/日有人上班，其休/例配額允許遞延至第二週。
   function reconcileDraftRestShortfalls(assignments, staff, days, locked, diagnostics) {
     const dailyOff = days.map(d => isWeekday(d) ? dailyOffCount(assignments, staff, d) : 0);
+    const weeks = getMonthWeeks(days);
 
     staff.forEach(s => {
       if (s.fixedShift) return;
-      const T = restTargets(days);
-      const initialQuota = countRestQuotas(assignments, s.id, days);
-      const hasOverQuota = ['休','例','國'].some(code => initialQuota[code] > T[code]);
-      if (hasOverQuota) return;
 
-      ['休','例','國'].forEach(code => {
-        let q = countRestQuotas(assignments, s.id, days);
-        const cur = q[code];
-        const target = T[code];
+      // ── 休/例：週內補充 ──
+      // 計算每週對此員工的有效目標（含特殊情況遞延）
+      const weekTargets = weeks.map(week => ({
+        target休: week.filter(d => d.dow === 6).length,
+        target例: week.filter(d => d.dow === 0).length,
+      }));
 
-        if (cur > target) {
-          return;
+      // 特殊情況：第一週無平日（僅含週六、週日）
+      if (weeks.length >= 2) {
+        const week1 = weeks[0];
+        const week1HasWeekday = week1.some(d => d.dow >= 1 && d.dow <= 5);
+        if (!week1HasWeekday) {
+          let overflow休 = 0, overflow例 = 0;
+          week1.forEach(d => {
+            const c = assignments[s.id] && assignments[s.id][d.date];
+            if (d.dow === 6 && c && isWork(c)) overflow休++;
+            if (d.dow === 0 && c && isWork(c)) overflow例++;
+          });
+          weekTargets[0].target休 -= overflow休;
+          weekTargets[0].target例 -= overflow例;
+          weekTargets[1].target休 += overflow休;
+          weekTargets[1].target例 += overflow例;
         }
+      }
 
-        let toAdd = target - cur;
+      weeks.forEach((week, wi) => {
+        ['休', '例'].forEach(code => {
+          const target = code === '休' ? weekTargets[wi].target休 : weekTargets[wi].target例;
+
+          let cur = 0;
+          week.forEach(d => {
+            if (restQuotaCode(assignments[s.id][d.date]) === code) cur++;
+          });
+
+          if (cur >= target) return;
+          let toAdd = target - cur;
+
+          while (toAdd > 0) {
+            const best = pickDraftRestShortfallDay(assignments, staff, days, locked, dailyOff, s, code, week);
+            if (!best) break;
+            commitMutations(assignments, best.mutations);
+            dailyOff[best.dayIdx]++;
+            toAdd--;
+          }
+
+          if (toAdd > 0) {
+            addDiagnostic(diagnostics, 'token-shortfall',
+              s, null, `${s.name} 週 ${week[0].date} 「${code}」尚缺 ${toAdd} 個；週內找不到可用平日白班格`);
+          }
+        });
+      });
+
+      // ── 國：全月補充（不受週限制）──
+      const T國 = restTargets(days)['國'];
+      let q國 = countRestQuotas(assignments, s.id, days)['國'];
+      if (q國 < T國) {
+        let toAdd = T國 - q國;
         while (toAdd > 0) {
-          const best = pickDraftRestShortfallDay(assignments, staff, days, locked, dailyOff, s, code);
+          const best = pickDraftRestShortfallDay(assignments, staff, days, locked, dailyOff, s, '國', null);
           if (!best) break;
           commitMutations(assignments, best.mutations);
           dailyOff[best.dayIdx]++;
           toAdd--;
         }
-
-        if (toAdd > 0) {
+        q國 = countRestQuotas(assignments, s.id, days)['國'];
+        if (q國 < T國) {
           addDiagnostic(diagnostics, 'token-shortfall',
-            s, null, `${s.name} 「${code}」尚缺 ${toAdd} 個；找不到平日白班且 off cap < ${MAX_DAILY_LEAVE} 的格子可升 off`);
+            s, null, `${s.name} 「國」尚缺 ${T國 - q國} 個；找不到平日白班且 off cap < ${MAX_DAILY_LEAVE} 的格子可升 off`);
         }
-      });
+      }
     });
   }
 
   function rebalanceRestQuotaLabels(assignments, staff, days, locked, diagnostics) {
-    const codes = ['休','例','國'];
+    const weeks = getMonthWeeks(days);
+
+    // 取得某員工在指定 days 陣列內的休/例/國 quota 計數
+    function countRestInDays(dayList, staffId) {
+      const count = { '休': 0, '例': 0, '國': 0 };
+      dayList.forEach(d => {
+        const c = restQuotaCode(assignments[staffId][d.date]);
+        if (count[c] !== undefined) count[c]++;
+      });
+      return count;
+    }
 
     staff.forEach(s => {
       if (s.fixedShift) return;
-      const T = () => restTargets(days);
 
-      let changed = true;
-      while (changed) {
-        changed = false;
-        const q = countRestQuotas(assignments, s.id, days);
-        const targets = T();
-        const over = codes.find(code => q[code] > targets[code]);
-        const short = codes.find(code => q[code] < targets[code]);
-        if (!over || !short) break;
+      // 休/例：週內平衡（不可跨週）
+      weeks.forEach(week => {
+        const target休 = week.filter(d => d.dow === 6).length;
+        const target例 = week.filter(d => d.dow === 0).length;
+        const restCodes = ['休', '例'];
+
+        let changed = true;
+        while (changed) {
+          changed = false;
+          const q = countRestInDays(week, s.id);
+          const over  = restCodes.find(code => (code === '休' ? q['休'] > target休 : q['例'] > target例));
+          const short = restCodes.find(code => (code === '休' ? q['休'] < target休 : q['例'] < target例));
+          if (!over || !short) break;
+
+          let best = null;
+          week.forEach((d, relIdx) => {
+            const absIdx = days.indexOf(d);
+            const cur = assignments[s.id][d.date];
+            if (isRestWork(cur)) return;
+            if (cur === '休*') return;
+            if (restQuotaCode(cur) !== over) return;
+            if (isLocked(locked, s.id, d.date)) return;
+
+            const candidate = evaluateMutations(assignments, staff, days, [
+              { staffId: s.id, date: d.date, value: short },
+            ]);
+            if (!candidate || !noHardRuleRegression(candidate.before, candidate.after)) return;
+
+            const score = restRelabelScore(over, short, d, absIdx);
+            if (!best || score < best.score) best = { ...candidate, score };
+          });
+
+          if (!best) break;
+          commitMutations(assignments, best.mutations);
+          changed = true;
+        }
+
+        // 週內 token-over 診斷
+        const qFinal = countRestInDays(week, s.id);
+        if (qFinal['休'] > target休) {
+          addDiagnostic(diagnostics, 'token-over',
+            s, null, `${s.name} 週 ${week[0].date} 「休」過多 ${qFinal['休'] - target休} 個，找不到可重標籤的格`);
+        }
+        if (qFinal['例'] > target例) {
+          addDiagnostic(diagnostics, 'token-over',
+            s, null, `${s.name} 週 ${week[0].date} 「例」過多 ${qFinal['例'] - target例} 個，找不到可重標籤的格`);
+        }
+      });
+
+      // 國：保持月全局平衡（不受週限制）
+      const monthlyTarget國 = restTargets(days)['國'];
+      let changed國 = true;
+      while (changed國) {
+        changed國 = false;
+        const q國 = countRestQuotas(assignments, s.id, days)['國'];
+        if (q國 <= monthlyTarget國) break;
 
         let best = null;
         days.forEach((d, idx) => {
           const cur = assignments[s.id][d.date];
-          if (isRestWork(cur)) return;
-          if (cur === '休*') return;
-          if (restQuotaCode(cur) !== over) return;
+          if (cur !== '國') return;
           if (isLocked(locked, s.id, d.date)) return;
+
+          // 找月內欠缺的非國 rest code
+          const q = countRestQuotas(assignments, s.id, days);
+          const T = restTargets(days);
+          const short = ['休', '例'].find(code => q[code] < T[code]);
+          if (!short) return;
 
           const candidate = evaluateMutations(assignments, staff, days, [
             { staffId: s.id, date: d.date, value: short },
           ]);
           if (!candidate || !noHardRuleRegression(candidate.before, candidate.after)) return;
 
-          const score = restRelabelScore(over, short, d, idx);
+          const score = restRelabelScore('國', short, d, idx);
           if (!best || score < best.score) best = { ...candidate, score };
         });
 
         if (!best) break;
         commitMutations(assignments, best.mutations);
-        changed = true;
+        changed國 = true;
       }
 
-      const q = countRestQuotas(assignments, s.id, days);
-      const targets = T();
-      codes.forEach(code => {
-        if (q[code] > targets[code]) {
-          addDiagnostic(diagnostics, 'token-over',
-            s, null, `${s.name} 「${code}」過多 ${q[code] - targets[code]} 個，找不到可重標籤的休例國格`);
-        }
-      });
+      const q國Final = countRestQuotas(assignments, s.id, days)['國'];
+      if (q國Final > restTargets(days)['國']) {
+        addDiagnostic(diagnostics, 'token-over',
+          s, null, `${s.name} 「國」過多 ${q國Final - restTargets(days)['國']} 個，找不到可重標籤的休例國格`);
+      }
     });
   }
 
@@ -3388,6 +3496,13 @@ const Scheduler = (() => {
       return n;
     });
 
+    const weeks = getMonthWeeks(days);
+    // 判斷兩個 day index 是否在同一週（用於休/例的同週限制）
+    const dayWeekIdx = new Array(days.length);
+    weeks.forEach((week, wi) => {
+      week.forEach(d => { dayWeekIdx[days.indexOf(d)] = wi; });
+    });
+
     days.forEach((d, dayIdx) => {
       if (!isWD(d)) return;
 
@@ -3404,6 +3519,9 @@ const Scheduler = (() => {
             if (dailyOff[ti] >= MAX_DAILY_LEAVE) return;
             if (isLocked(locked, s.id, td.date)) return;
             if (assignments[s.id][td.date] !== '白') return;
+            // 休/例：不可跨週搬移
+            if ((code === '休' || code === '休*' || code === '例') &&
+                dayWeekIdx[ti] !== dayWeekIdx[dayIdx]) return;
 
             const score = dailyOff[ti] * 100 + Math.abs(ti - dayIdx);
             if (!bestMove || score < bestMove.score) {
@@ -3511,6 +3629,20 @@ const Scheduler = (() => {
     }
   }
 
+  // 鎖定所有非固定班在假日（週六/日）和國定假日的格子，使修班流程不再動這些班別
+  function buildHolidayPatternLocks(assignments, staff, days) {
+    const locked = {};
+    days.forEach(d => {
+      if (d.rotationGroup !== 'regular' && d.rotationGroup !== 'national') return;
+      staff.forEach(s => {
+        if (s.fixedShift) return;
+        const val = assignments[s.id] && assignments[s.id][d.date];
+        if (val !== undefined && val !== null) lockCell(locked, s.id, d.date, val);
+      });
+    });
+    return locked;
+  }
+
   function runRepairPipeline(assignments, staff, days, constraints, diagnostics) {
     const appliedHardLocks = {};
     const stages = splitManualRequests(constraints, staff, days);
@@ -3521,6 +3653,9 @@ const Scheduler = (() => {
 
     let locked = mergeLocks(hardLocks, appliedHardLocks);
     ensureSundayStarCoverage(assignments, staff, days, locked, diagnostics);
+    // 假日/國定假日底稿鎖定：ensureSundayStarCoverage 後才鎖，保留 休* 放置結果
+    const holidayPatternLocks = buildHolidayPatternLocks(assignments, staff, days);
+    locked = mergeLocks(locked, holidayPatternLocks);
     rebalanceRestQuotaLabels(assignments, staff, days, locked, diagnostics);
     reconcileDraftRestShortfalls(assignments, staff, days, locked, diagnostics);
     repairCoverageGaps(assignments, staff, days, locked, false);
