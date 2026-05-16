@@ -774,7 +774,7 @@ const Scheduler = (() => {
          + 200  * cov.dups      // 每日特殊班重複
          + 50  * dailyOffOver
          + 10  * (stddev(ns) + stddev(es))
-         + 100 * missNE;
+         + 20  * missNE;
   }
 
   function quotaDeviation(assignments, staff, days) {
@@ -3667,7 +3667,7 @@ const Scheduler = (() => {
 
     applyWorkPreferences(assignments, staff, days, stages.work, locked, diagnostics);
 
-    locked = mergeLocks(hardLocks, appliedHardLocks);
+    locked = mergeLocks(hardLocks, appliedHardLocks, holidayPatternLocks);
     stabilizeHardRules(assignments, staff, days, locked, diagnostics, 3);
     const preferenceLocks = buildSatisfiedPreferenceLocks(assignments, stages.work);
     addUnappliedPreferenceDiagnostics(assignments, staff, days, stages.work, diagnostics, locked);

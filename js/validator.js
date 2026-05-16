@@ -367,29 +367,10 @@ const Validator = (() => {
   }
 
   // 規則 8: 每位輪班人員在平日（週一至週五，非國定假日）至少要有一個 N 和一個 E
-  function checkMonthlyNE(schedule, staff, errs) {
-    const { days, assignments } = schedule;
-    const weekdays = days.filter(d => d.dow >= 1 && d.dow <= 5 && !d.isHoliday);
-    staff.forEach(s => {
-      if (s.fixedShift) return;
-      const forbidden = new Set(s.forbidden || []);
-      if (!forbidden.has('N')) {
-        const hasN = weekdays.some(d => workCode(getCode(assignments, s.id, d.date)) === 'N');
-        if (!hasN) errs.push({
-          type: 'no-weekday-N',
-          staffId: s.id, name: s.name, date: null,
-          msg: `${s.name} 平日未排到 N（大夜）`,
-        });
-      }
-      if (!forbidden.has('E')) {
-        const hasE = weekdays.some(d => workCode(getCode(assignments, s.id, d.date)) === 'E');
-        if (!hasE) errs.push({
-          type: 'no-weekday-E',
-          staffId: s.id, name: s.name, date: null,
-          msg: `${s.name} 平日未排到 E（小夜）`,
-        });
-      }
-    });
+  // 規則 8 (軟性目標): N/E 平日至少各一次 — 引擎達不到時不算違規
+  // 診斷由 ensureMonthlyNE 以 addDiagnostic 回報（no-weekday-N / no-weekday-E）
+  function checkMonthlyNE(_schedule, _staff, _errs) {
+    /* 軟性目標：validator 不報 hard error */
   }
 
   // 規則 9: 個人禁忌班
