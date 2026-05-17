@@ -53,6 +53,27 @@ const Scheduler = (() => {
     return count;
   }
 
+  function monthlyGuoDeviation(assignments, staffId, days) {
+    const target = restTargets(days)['國'];
+    return Math.abs(countRestQuotas(assignments, staffId, days)['國'] - target);
+  }
+
+  function staffRestQuotaDeviation(assignments, staffId, days) {
+    return weeklyRestDeviation(days, assignments, staffId)
+         + monthlyGuoDeviation(assignments, staffId, days);
+  }
+
+  function staffMonthlyNECounts(assignments, staffId, days) {
+    const out = { N: 0, E: 0 };
+    days.filter(isTrueWeekday).forEach(d => {
+      const c = assignments[staffId] && assignments[staffId][d.date];
+      const wc = workCode(c);
+      if (wc === 'N') out.N++;
+      if (wc === 'E') out.E++;
+    });
+    return out;
+  }
+
   function totalWorkDays(assignments, staffId, days) {
     let n = 0;
     days.forEach(d => {
@@ -498,34 +519,49 @@ const Scheduler = (() => {
     return isOff(code);
   }
 
-  function pickPatternStaff(assignments, rotStaff, day, idealIdx, code, assigned, locked) {
+  function pickPatternStaff(assignments, rotStaff, day, idealIdx, assigned, locked, code, days, dayIdx) {
     if (rotStaff.length === 0) return null;
+    const wc = code ? workCode(code) : null;
+    // Sequence checks only apply on holiday/weekend days: weekday violations are fixable by repair.
+    const isHolidayDay = day.rotationGroup === 'regular' || day.rotationGroup === 'national';
     for (let step = 0; step < rotStaff.length; step++) {
       const s = rotStaff[(idealIdx + step) % rotStaff.length];
       if (assigned.has(s.id)) continue;
       if (isLocked(locked, s.id, day.date)) continue;
       if (!isPresetBlankForDay(assignments[s.id][day.date], day)) continue;
+      if (code && ((s.forbidden || []).includes(code) || (s.forbidden || []).includes(wc))) continue;
+      if (isHolidayDay && days && dayIdx > 0) {
+        const prevDate = days[dayIdx - 1].date;
+        const prevCode = assignments[s.id][prevDate];
+        const prevWc = prevCode ? workCode(prevCode) : null;
+        if (wc === 'N' && prevCode !== null && !isOff(prevCode) && prevWc !== 'N') continue;
+        if (prevWc === 'E' && code && !isAllowedAfterE(code)) continue;
+        if (prevWc === '3' && code && !isAllowedAfter3(code)) continue;
+      }
       return s;
     }
     return null;
   }
 
-  function placePatternCode(assignments, staff, rotStaff, day, baseOffset, patternIdx, code, assigned, locked) {
-    if (!code) return;
-    if (rotStaff.length === 0) return;
-    if (dayHasCode(assignments, staff, day.date, code)) return;
+  function placePatternCode(assignments, staff, rotStaff, day, baseOffset, patternIdx, code, assigned, locked, days, dayIdx) {
+    if (!code) return null;
+    if (rotStaff.length === 0) return null;
+    if (dayHasCode(assignments, staff, day.date, code)) return null;
     const chosen = pickPatternStaff(
       assignments,
       rotStaff,
       day,
       (baseOffset + patternIdx) % rotStaff.length,
-      code,
       assigned,
-      locked
+      locked,
+      code,
+      days,
+      dayIdx
     );
-    if (!chosen) return;
+    if (!chosen) return null;
     assignments[chosen.id][day.date] = code;
     assigned.add(chosen.id);
+    return chosen;
   }
 
   function activeDraftStaffForGroup(staff, groupData) {
@@ -557,7 +593,7 @@ const Scheduler = (() => {
     let weekdayOffset = 0;
     let holidayOffset = 0;
 
-    days.forEach(day => {
+    days.forEach((day, dayIdx) => {
       const assigned = new Set();
 
       staff.forEach(s => {
@@ -585,7 +621,7 @@ const Scheduler = (() => {
           });
         } else {
           WEEKDAY_PATTERN.forEach((code, idx) => {
-            placePatternCode(assignments, staff, weekdayStaff, day, weekdayOffset, idx, code, assigned, locked);
+            placePatternCode(assignments, staff, weekdayStaff, day, weekdayOffset, idx, code, assigned, locked, days, dayIdx);
           });
         }
         weekdayOffset = (weekdayOffset + 1) % Math.max(weekdayStaff.length, 1);
@@ -612,7 +648,7 @@ const Scheduler = (() => {
         } else {
           const pattern = (day.dow === 0) ? SUNDAY_PATTERN : HOLIDAY_PATTERN;
           pattern.forEach((code, idx) => {
-            placePatternCode(assignments, staff, holidayStaff, day, holidayOffset, idx, code, assigned, locked);
+            placePatternCode(assignments, staff, holidayStaff, day, holidayOffset, idx, code, assigned, locked, days, dayIdx);
           });
           holidayOffset = (holidayOffset + 1) % Math.max(holidayStaff.length, 1);
         }
@@ -623,7 +659,7 @@ const Scheduler = (() => {
   function initPatternDraft(schedule, staff, _constraints, rotation) {
     const { days } = schedule;
     const assignments = emptyAssignments(staff, days);
-    // Init 底稿只看固定班與禁忌班，刻意不套用月內手動指定。
+    // Init 底稿只填固定班與底稿 pattern，不套用禁忌、接續、請假或偏好修正。
     // 使用者的請假/指定班會保留在 constraints，等「下一步修班」再套用與交換。
     const locked = {};
 
@@ -694,6 +730,45 @@ const Scheduler = (() => {
     return conflicts;
   }
 
+  function countStaffConflicts(assignments, s, days) {
+    if (!s || s.fixedShift) return 0;
+    const forbidden = new Set(s.forbidden || []);
+    let run = 0;
+    let count = 0;
+
+    for (let i = 0; i < days.length; i++) {
+      const cur = assignments[s.id][days[i].date];
+      const curWork = workCode(cur);
+
+      if (cur && (forbidden.has(cur) || forbidden.has(curWork))) count++;
+      if (curWork === 'N' && i > 0) {
+        const prev = assignments[s.id][days[i - 1].date];
+        if (prev !== null && !isOff(prev) && workCode(prev) !== 'N') count++;
+      }
+      if (curWork === 'N' && i < days.length - 1) {
+        const nxt = assignments[s.id][days[i + 1].date];
+        if (workCode(nxt) === '△') count++;
+      }
+      if (curWork === 'E' && i < days.length - 1) {
+        const nxt = assignments[s.id][days[i + 1].date];
+        if (!isAllowedAfterE(nxt)) count++;
+      }
+      if (curWork === '3' && i < days.length - 1) {
+        const nxt = assignments[s.id][days[i + 1].date];
+        if (!isAllowedAfter3(nxt)) count++;
+      }
+
+      if (cur && isWork(cur)) {
+        run++;
+        if (run > 6) count++;
+      } else {
+        run = 0;
+      }
+    }
+
+    return count;
+  }
+
   // 每日特殊班缺額 + 重複 (一班別超過 1 人) 加總
   function detectCoverageIssues(assignments, staff, days) {
     let gaps = 0;
@@ -725,25 +800,16 @@ const Scheduler = (() => {
     let quotaDev = 0;
     staff.forEach(s => {
       if (s.fixedShift) return;
-      const T = restTargets(days);
-      const q = countRestQuotas(assignments, s.id, days);
-      quotaDev += Math.abs(q['休'] - T['休'])
-                + Math.abs(q['例'] - T['例'])
-                + Math.abs(q['國'] - T['國']);
+      quotaDev += staffRestQuotaDeviation(assignments, s.id, days);
     });
 
-    const weekdaysOnly = days.filter(d => d.dow >= 1 && d.dow <= 5 && !d.isHoliday);
     const rotN = staff.filter(s => !s.fixedShift && !(s.forbidden||[]).includes('N'));
     const ns = rotN.map(s => {
-      let n = 0;
-      weekdaysOnly.forEach(d => { if (workCode(assignments[s.id][d.date]) === 'N') n++; });
-      return n;
+      return staffMonthlyNECounts(assignments, s.id, days).N;
     });
     const rotE = staff.filter(s => !s.fixedShift && !(s.forbidden||[]).includes('E'));
     const es = rotE.map(s => {
-      let n = 0;
-      weekdaysOnly.forEach(d => { if (workCode(assignments[s.id][d.date]) === 'E') n++; });
-      return n;
+      return staffMonthlyNECounts(assignments, s.id, days).E;
     });
 
     const stddev = arr => {
@@ -781,11 +847,7 @@ const Scheduler = (() => {
     let dev = 0;
     staff.forEach(s => {
       if (s.fixedShift) return;
-      const T = restTargets(days);
-      const q = countRestQuotas(assignments, s.id, days);
-      dev += Math.abs(q['休'] - T['休'])
-           + Math.abs(q['例'] - T['例'])
-           + Math.abs(q['國'] - T['國']);
+      dev += staffRestQuotaDeviation(assignments, s.id, days);
     });
     return dev;
   }
@@ -1496,13 +1558,13 @@ const Scheduler = (() => {
     if (!canReceiveManualOffCode(req.staff, req.day, '請', locked)) return false;
     const cur = assignments[req.staff.id][req.date];
 
-    if (cur === '休*') {
-      assignments[req.staff.id][req.date] = '休';
+    if (isRestToken(cur)) {
       return true;
     }
 
-    if (isRestToken(cur)) {
-      return true;
+    if ((req.day.rotationGroup === 'regular' || req.day.rotationGroup === 'national') &&
+        cur && isWork(cur)) {
+      return false;
     }
 
     if (cur === '請') {
@@ -2102,6 +2164,10 @@ const Scheduler = (() => {
     if (req.staff.fixedShift) {
       if (isLocked(locked, req.staff.id, req.date)) return false;
       if (req.code === '請') {
+        const cur = assignments[req.staff.id] && assignments[req.staff.id][req.date];
+        if (isRestToken(cur)) return true;
+        if ((req.day.rotationGroup === 'regular' || req.day.rotationGroup === 'national') &&
+            cur && isWork(cur)) return false;
         assignments[req.staff.id][req.date] = '請';
         return true;
       }
@@ -2143,6 +2209,14 @@ const Scheduler = (() => {
   function manualFailureInfo(assignments, staff, days, locked, req) {
     if (isLocked(locked, req.staff.id, req.date)) {
       return { type: 'manual-locked', reason: '被其他手動設定鎖住' };
+    }
+
+    if (req.code === '請') {
+      const cur = assignments[req.staff.id] && assignments[req.staff.id][req.date];
+      if ((req.day.rotationGroup === 'regular' || req.day.rotationGroup === 'national') &&
+          cur && isWork(cur)) {
+        return { type: 'manual-holiday-leave-not-applied', reason: `假日底稿班「${cur}」已鎖定，保留原班，請假未套用` };
+      }
     }
 
     if (req.staff.fixedShift && req.code !== '請' && !isCircleShiftCode(req.code)
@@ -2888,6 +2962,151 @@ const Scheduler = (() => {
     return false;
   }
 
+  function tryTwoDayNightBridge(assignments, staff, days, locked, staffMember, nightIdx) {
+    const prevIdx = nightIdx - 1;
+    const bridgeIdx = prevIdx - 1;
+    if (prevIdx < 0 || bridgeIdx < 0 || staffMember.fixedShift) return false;
+    const prevDay = days[prevIdx];
+    const bridgeDay = days[bridgeIdx];
+    if (isLocked(locked, staffMember.id, prevDay.date) ||
+        isLocked(locked, staffMember.id, bridgeDay.date)) return false;
+
+    const prevCode = assignments[staffMember.id][prevDay.date];
+    const bridgeCode = assignments[staffMember.id][bridgeDay.date];
+    if (!prevCode || !bridgeCode || !isWork(prevCode) || !isWork(bridgeCode)) return false;
+
+    for (const donor of staff) {
+      if (donor.id === staffMember.id || donor.fixedShift) continue;
+      if (isLocked(locked, donor.id, prevDay.date) || isLocked(locked, donor.id, bridgeDay.date)) continue;
+      if (workCode(assignments[donor.id][prevDay.date]) !== 'N') continue;
+      if (workCode(assignments[donor.id][bridgeDay.date]) !== 'N') continue;
+      if (!canReceiveWorkCode(assignments, staffMember, days, prevIdx, assignments[donor.id][prevDay.date], locked)) continue;
+      if (!canReceiveWorkCode(assignments, donor, days, prevIdx, prevCode, locked)) continue;
+      if (!canReceiveWorkCode(assignments, staffMember, days, bridgeIdx, assignments[donor.id][bridgeDay.date], locked)) continue;
+      if (!canReceiveWorkCode(assignments, donor, days, bridgeIdx, bridgeCode, locked)) continue;
+
+      const mutations = [
+        { staffId: staffMember.id, date: prevDay.date, value: assignments[donor.id][prevDay.date] },
+        { staffId: donor.id, date: prevDay.date, value: prevCode },
+        { staffId: staffMember.id, date: bridgeDay.date, value: assignments[donor.id][bridgeDay.date] },
+        { staffId: donor.id, date: bridgeDay.date, value: bridgeCode },
+      ];
+      const candidate = evaluateRepairPackage(
+        assignments, staff, days, locked, mutations,
+        improvesHardSafely, { localRepair: true, tokenAware: true });
+      if (!candidate) continue;
+      replaceAssignments(assignments, candidate.assignments, staff, days);
+      return true;
+    }
+
+    return false;
+  }
+
+  function tryTransferNightRunToPreviousNightHolder(assignments, staff, days, locked, staffMember, nightIdx) {
+    const prevIdx = nightIdx - 1;
+    if (prevIdx < 0 || staffMember.fixedShift) return false;
+
+    let runEnd = nightIdx;
+    while (runEnd + 1 < days.length &&
+           workCode(assignments[staffMember.id][days[runEnd + 1].date]) === 'N') {
+      runEnd++;
+    }
+
+    for (const partner of staff) {
+      if (partner.id === staffMember.id || partner.fixedShift) continue;
+      if (workCode(assignments[partner.id][days[prevIdx].date]) !== 'N') continue;
+
+      const mutations = [];
+      let ok = true;
+      for (let idx = nightIdx; idx <= runEnd; idx++) {
+        const day = days[idx];
+        if (isLocked(locked, staffMember.id, day.date) || isLocked(locked, partner.id, day.date)) {
+          ok = false;
+          break;
+        }
+        const staffCode = assignments[staffMember.id][day.date];
+        const partnerCode = assignments[partner.id][day.date];
+        if (workCode(staffCode) !== 'N') {
+          ok = false;
+          break;
+        }
+        if (!partnerCode || !isWork(partnerCode)) {
+          ok = false;
+          break;
+        }
+        if (!canReceiveWorkCode(assignments, partner, days, idx, staffCode, locked) ||
+            !canReceiveWorkCode(assignments, staffMember, days, idx, partnerCode, locked)) {
+          ok = false;
+          break;
+        }
+        mutations.push(
+          { staffId: staffMember.id, date: day.date, value: partnerCode },
+          { staffId: partner.id, date: day.date, value: staffCode },
+        );
+      }
+      if (!ok || mutations.length === 0) continue;
+
+      const candidate = evaluateRepairPackage(
+        assignments, staff, days, locked, mutations,
+        improvesHardSafely, { localRepair: true, tokenAware: true });
+      if (!candidate) continue;
+      replaceAssignments(assignments, candidate.assignments, staff, days);
+      return true;
+    }
+
+    return false;
+  }
+
+  function tryMoveOwnTokenToWorkDayWithWhiteDonor(assignments, staff, days, locked, staffMember, targetIdx) {
+    const targetDay = days[targetIdx];
+    if (!targetDay || staffMember.fixedShift) return false;
+    if (isLocked(locked, staffMember.id, targetDay.date)) return false;
+
+    const workShift = assignments[staffMember.id][targetDay.date];
+    if (!workShift || !isWork(workShift) || isRestWork(workShift)) return false;
+
+    const donors = staff.filter(s =>
+      s.id !== staffMember.id &&
+      !s.fixedShift &&
+      !isLocked(locked, s.id, targetDay.date) &&
+      assignments[s.id][targetDay.date] === '白' &&
+      canReceiveWorkCode(assignments, s, days, targetIdx, workShift, locked)
+    );
+    if (donors.length === 0) return false;
+
+    const tokenDays = [];
+    const state = buildWeeklyRestState(days, assignments, staffMember.id);
+    const weekIdx = state.dayWeekIndex[targetDay.date];
+    const searchDays = weekIdx === undefined ? days : state.weeks[weekIdx];
+    searchDays.forEach(d => {
+      const idx = days.indexOf(d);
+      if (idx < 0 || idx === targetIdx || !isWeekday(d)) return;
+      if (isLocked(locked, staffMember.id, d.date)) return;
+      const code = assignments[staffMember.id][d.date];
+      if (!isRestToken(code) || code === '休*') return;
+      tokenDays.push({ idx, day: d, code, score: Math.abs(idx - targetIdx) });
+    });
+    tokenDays.sort((a, b) => a.score - b.score);
+
+    for (const token of tokenDays) {
+      for (const donor of donors) {
+        const mutations = [
+          { staffId: staffMember.id, date: targetDay.date, value: token.code },
+          { staffId: donor.id, date: targetDay.date, value: workShift },
+          { staffId: staffMember.id, date: token.day.date, value: '白' },
+        ];
+        const candidate = evaluateRepairPackage(
+          assignments, staff, days, locked, mutations,
+          improvesHardSafely, { localRepair: true, tokenAware: true });
+        if (!candidate) continue;
+        replaceAssignments(assignments, candidate.assignments, staff, days);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function trySwapWorkWithOffAndCompensate(assignments, staff, days, locked, workStaff, workIdx) {
     const workDay = days[workIdx];
     if (!workDay || workStaff.fixedShift) return false;
@@ -2955,10 +3174,19 @@ const Scheduler = (() => {
       const prevDay = days[prevIdx];
       const prevCode = assignments[s.id][prevDay.date];
 
+      if (tryTransferNightRunToPreviousNightHolder(assignments, staff, days, locked, s, conflict.dayIdx)) {
+        return true;
+      }
+      if (tryTwoDayNightBridge(assignments, staff, days, locked, s, conflict.dayIdx)) {
+        return true;
+      }
       if (prevCode === '白') {
         return tryMoveOwnTokenToDay(assignments, staff, days, locked, s, prevIdx);
       }
       if (prevCode && isWork(prevCode)) {
+        if (tryMoveOwnTokenToWorkDayWithWhiteDonor(assignments, staff, days, locked, s, prevIdx)) {
+          return true;
+        }
         return trySwapWorkWithOffAndCompensate(assignments, staff, days, locked, s, prevIdx);
       }
     }
@@ -3125,68 +3353,278 @@ const Scheduler = (() => {
     return best;
   }
 
+  function candidateImprovesQuota(candidate) {
+    return candidate
+        && noHardRuleRegression(candidate.before, candidate.after)
+        && candidate.after.quotaDev < candidate.before.quotaDev;
+  }
+
+  function evaluateFocusedRestQuotaMutations(assignments, staff, days, focusStaff, mutations) {
+    if (!mutations || mutations.length === 0 || !focusStaff || focusStaff.length === 0) return null;
+
+    const beforeValues = new Map();
+    mutations.forEach(m => {
+      const key = `${m.staffId}@@${m.date}`;
+      if (!beforeValues.has(key)) {
+        beforeValues.set(key, {
+          staffId: m.staffId,
+          date: m.date,
+          value: assignments[m.staffId][m.date],
+        });
+      }
+    });
+
+    const focusedHard = () => focusStaff.reduce((sum, s) => sum + countStaffConflicts(assignments, s, days), 0);
+    const focusedQuota = () => focusStaff.reduce((sum, s) => {
+      if (!s || s.fixedShift) return sum;
+      return sum + staffRestQuotaDeviation(assignments, s.id, days);
+    }, 0);
+
+    const before = {
+      hard: focusedHard(),
+      gaps: 0,
+      dups: 0,
+      quotaDev: focusedQuota(),
+      dailyOffOver: weekdayOffOverCount(assignments, staff, days),
+    };
+
+    commitMutations(assignments, mutations);
+
+    const after = {
+      hard: focusedHard(),
+      gaps: 0,
+      dups: 0,
+      quotaDev: focusedQuota(),
+      dailyOffOver: weekdayOffOverCount(assignments, staff, days),
+    };
+
+    beforeValues.forEach(v => {
+      assignments[v.staffId][v.date] = v.value;
+    });
+
+    if (!candidateImprovesQuota({ before, after })) return null;
+    return { before, after, cost: 0, mutations };
+  }
+
+  function evaluateLocalRestQuotaMutations(assignments, staff, days, staffMember, mutations) {
+    return evaluateFocusedRestQuotaMutations(assignments, staff, days, [staffMember], mutations);
+  }
+
+  function betterQuotaCandidate(candidate, best, penalty) {
+    if (!candidateImprovesQuota(candidate)) return best;
+    const score = candidate.after.quotaDev * 100000
+                + candidate.after.dailyOffOver * 10000
+                + (penalty || 0)
+                + candidate.cost;
+    if (!best || score < best.score) return { ...candidate, score };
+    return best;
+  }
+
+  function findWeeklyRestRepair(assignments, staff, days, locked, dailyOff, staffMember) {
+    const state = buildWeeklyRestState(days, assignments, staffMember.id);
+    const over = [];
+    const short = [];
+
+    state.weeks.forEach((_week, wi) => {
+      ['休', '例'].forEach(code => {
+        const delta = state.counts[wi][code] - state.targets[wi][code];
+        if (delta > 0) over.push({ wi, code, delta });
+        if (delta < 0) short.push({ wi, code, delta: -delta });
+      });
+    });
+
+    const donorDays = item => state.weeks[item.wi].map(d => {
+      const idx = days.indexOf(d);
+      return { d, idx, cur: assignments[staffMember.id][d.date] };
+    }).filter(x => {
+      if (x.idx < 0) return false;
+      if (isRestWork(x.cur) || x.cur === '休*') return false;
+      if (restQuotaCode(x.cur) !== item.code) return false;
+      // 鎖定的平日格不可動；鎖定的假日 off 格允許 休↔例 同週換標
+      if (isLocked(locked, staffMember.id, x.d.date) && !isHolidayLike(x.d)) return false;
+      return true;
+    });
+
+    const weekdayDonorDays = item => donorDays(item).filter(x => isWeekday(x.d));
+
+    const receiverDays = item => state.weeks[item.wi].map(d => {
+      const idx = days.indexOf(d);
+      return { d, idx };
+    }).filter(x => {
+      if (x.idx < 0 || !isWeekday(x.d)) return false;
+      if (dailyOff[x.idx] >= MAX_DAILY_LEAVE) return false;
+      if (isLocked(locked, staffMember.id, x.d.date)) return false;
+      if (assignments[staffMember.id][x.d.date] !== '白') return false;
+      if (!canReceiveManualOffCode(staffMember, x.d, item.code, locked)) return false;
+      return true;
+    });
+
+    const tryMutations = (mutations) => {
+      return evaluateLocalRestQuotaMutations(assignments, staff, days, staffMember, mutations);
+    };
+
+    for (const o of over) {
+      for (const s of short) {
+        if (o.wi === s.wi && o.code !== s.code) {
+          const donors = donorDays(o).sort((a, b) => a.idx - b.idx);
+          for (const donor of donors) {
+            const mutation = [{ staffId: staffMember.id, date: donor.d.date, value: s.code }];
+            const candidate = tryMutations(mutation);
+            if (candidate) return candidate;
+          }
+        }
+      }
+    }
+
+    for (const o of over) {
+      for (const s of short) {
+        const donors = weekdayDonorDays(o).sort((a, b) => a.idx - b.idx);
+        const receivers = receiverDays(s).sort((a, b) => Math.abs(a.idx - donors[0]?.idx || 0) - Math.abs(b.idx - donors[0]?.idx || 0));
+        for (const donor of donors) {
+          for (const receiver of receivers) {
+            if (donor.idx === receiver.idx) continue;
+            const mutations = [
+              { staffId: staffMember.id, date: donor.d.date, value: '白' },
+              { staffId: staffMember.id, date: receiver.d.date, value: s.code },
+            ];
+            const candidate = tryMutations(mutations);
+            if (candidate) return candidate;
+          }
+        }
+      }
+    }
+
+    for (const s of short) {
+      const receivers = receiverDays(s).sort((a, b) => a.idx - b.idx);
+      for (const receiver of receivers) {
+          const mutation = [{ staffId: staffMember.id, date: receiver.d.date, value: s.code }];
+        const candidate = tryMutations(mutation);
+        if (candidate) return candidate;
+      }
+    }
+
+    for (const s of short) {
+      const workDays = state.weeks[s.wi].map(d => {
+        const idx = days.indexOf(d);
+        return { d, idx, cur: assignments[staffMember.id][d.date] };
+      }).filter(x => {
+        if (x.idx < 0 || !isWeekday(x.d)) return false;
+        if (isLocked(locked, staffMember.id, x.d.date)) return false;
+        if (!x.cur || !isWork(x.cur) || isRestWork(x.cur)) return false;
+        if (!canReceiveManualOffCode(staffMember, x.d, s.code, locked)) return false;
+        return true;
+      }).sort((a, b) => a.idx - b.idx);
+
+      for (const receiver of workDays) {
+        if (dailyOff[receiver.idx] >= MAX_DAILY_LEAVE) continue;
+        for (const donor of staff) {
+          if (donor.fixedShift || donor.id === staffMember.id) continue;
+          if (isLocked(locked, donor.id, receiver.d.date)) continue;
+          if (assignments[donor.id][receiver.d.date] !== '白') continue;
+
+          const saved = assignments[donor.id][receiver.d.date];
+          assignments[donor.id][receiver.d.date] = null;
+          const donorCanWork = absoluteHardOk(assignments, donor, days, receiver.idx, receiver.cur);
+          assignments[donor.id][receiver.d.date] = saved;
+          if (!donorCanWork) continue;
+
+          const mutations = [
+            { staffId: staffMember.id, date: receiver.d.date, value: s.code },
+            { staffId: donor.id, date: receiver.d.date, value: receiver.cur },
+          ];
+          const candidate = evaluateFocusedRestQuotaMutations(
+            assignments, staff, days, [staffMember, donor], mutations);
+          if (candidate) return candidate;
+        }
+      }
+
+      for (const receiver of workDays) {
+        for (const donor of staff) {
+          if (donor.fixedShift || donor.id === staffMember.id) continue;
+          if (isLocked(locked, donor.id, receiver.d.date)) continue;
+          const donorCur = assignments[donor.id][receiver.d.date];
+          if (donorCur === '請' || donorCur === '休*') continue;
+          if (restQuotaCode(donorCur) !== s.code) continue;
+
+          const saved = donorCur;
+          assignments[donor.id][receiver.d.date] = null;
+          const donorCanWork = absoluteHardOk(assignments, donor, days, receiver.idx, receiver.cur);
+          assignments[donor.id][receiver.d.date] = saved;
+          if (!donorCanWork) continue;
+
+          const mutations = [
+            { staffId: staffMember.id, date: receiver.d.date, value: donorCur },
+            { staffId: donor.id, date: receiver.d.date, value: receiver.cur },
+          ];
+          const candidate = evaluateFocusedRestQuotaMutations(
+            assignments, staff, days, [staffMember, donor], mutations);
+          if (candidate) return candidate;
+        }
+      }
+    }
+
+    for (const o of over) {
+      const donors = weekdayDonorDays(o).sort((a, b) => a.idx - b.idx);
+      for (const donor of donors) {
+        const mutation = [{ staffId: staffMember.id, date: donor.d.date, value: '白' }];
+        const candidate = tryMutations(mutation);
+        if (candidate) return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  function repairWeeklyRestQuotas(assignments, staff, days, locked, diagnostics) {
+    const MAX_ITER = 80;
+    const dailyOff = days.map(d => isWeekday(d) ? dailyOffCount(assignments, staff, d) : 0);
+
+    staff.forEach(s => {
+      if (s.fixedShift) return;
+      let iter = 0;
+      while (iter < MAX_ITER && weeklyRestDeviation(days, assignments, s.id) > 0) {
+        iter++;
+        const best = findWeeklyRestRepair(assignments, staff, days, locked, dailyOff, s);
+        if (!best) break;
+
+        best.mutations.forEach(m => {
+          const idx = days.findIndex(d => d.date === m.date);
+          if (idx < 0 || !isWeekday(days[idx])) return;
+          const before = assignments[m.staffId][m.date];
+          const beforeOff = OFF.has(before);
+          const afterOff = OFF.has(m.value);
+          if (!beforeOff && afterOff) dailyOff[idx]++;
+          if (beforeOff && !afterOff) dailyOff[idx]--;
+        });
+        commitMutations(assignments, best.mutations);
+      }
+
+      const state = buildWeeklyRestState(days, assignments, s.id);
+      state.weeks.forEach((week, wi) => {
+        ['休', '例'].forEach(code => {
+          const diff = state.counts[wi][code] - state.targets[wi][code];
+          if (diff < 0) {
+            addDiagnostic(diagnostics, 'token-shortfall',
+              s, null, `${s.name} 週 ${week[0].date} 「${code}」尚缺 ${Math.abs(diff)} 個；週內或邊界允許週找不到可用平日白班格`);
+          } else if (diff > 0) {
+            addDiagnostic(diagnostics, 'token-over',
+              s, null, `${s.name} 週 ${week[0].date} 「${code}」過多 ${diff} 個，找不到可搬移或重標籤的格`);
+          }
+        });
+      });
+    });
+  }
+
   // 只在底稿剛產生後使用：補足每位員工缺少的休/例/國 token。
   // 休/例：週內補充（不可跨週），國：全月補充。
   // 特殊情況：月份第一週無平日（月 1 日為週六或週日）時，
   //   若該六/日有人上班，其休/例配額允許遞延至第二週。
   function reconcileDraftRestShortfalls(assignments, staff, days, locked, diagnostics) {
+    repairWeeklyRestQuotas(assignments, staff, days, locked, diagnostics);
     const dailyOff = days.map(d => isWeekday(d) ? dailyOffCount(assignments, staff, d) : 0);
-    const weeks = getMonthWeeks(days);
 
     staff.forEach(s => {
       if (s.fixedShift) return;
-
-      // ── 休/例：週內補充 ──
-      // 計算每週對此員工的有效目標（含特殊情況遞延）
-      const weekTargets = weeks.map(week => ({
-        target休: week.filter(d => d.dow === 6).length,
-        target例: week.filter(d => d.dow === 0).length,
-      }));
-
-      // 特殊情況：第一週無平日（僅含週六、週日）
-      if (weeks.length >= 2) {
-        const week1 = weeks[0];
-        const week1HasWeekday = week1.some(d => d.dow >= 1 && d.dow <= 5);
-        if (!week1HasWeekday) {
-          let overflow休 = 0, overflow例 = 0;
-          week1.forEach(d => {
-            const c = assignments[s.id] && assignments[s.id][d.date];
-            if (d.dow === 6 && c && isWork(c)) overflow休++;
-            if (d.dow === 0 && c && isWork(c)) overflow例++;
-          });
-          weekTargets[0].target休 -= overflow休;
-          weekTargets[0].target例 -= overflow例;
-          weekTargets[1].target休 += overflow休;
-          weekTargets[1].target例 += overflow例;
-        }
-      }
-
-      weeks.forEach((week, wi) => {
-        ['休', '例'].forEach(code => {
-          const target = code === '休' ? weekTargets[wi].target休 : weekTargets[wi].target例;
-
-          let cur = 0;
-          week.forEach(d => {
-            if (restQuotaCode(assignments[s.id][d.date]) === code) cur++;
-          });
-
-          if (cur >= target) return;
-          let toAdd = target - cur;
-
-          while (toAdd > 0) {
-            const best = pickDraftRestShortfallDay(assignments, staff, days, locked, dailyOff, s, code, week);
-            if (!best) break;
-            commitMutations(assignments, best.mutations);
-            dailyOff[best.dayIdx]++;
-            toAdd--;
-          }
-
-          if (toAdd > 0) {
-            addDiagnostic(diagnostics, 'token-shortfall',
-              s, null, `${s.name} 週 ${week[0].date} 「${code}」尚缺 ${toAdd} 個；週內找不到可用平日白班格`);
-          }
-        });
-      });
 
       // ── 國：全月補充（不受週限制）──
       const T國 = restTargets(days)['國'];
@@ -3210,69 +3648,10 @@ const Scheduler = (() => {
   }
 
   function rebalanceRestQuotaLabels(assignments, staff, days, locked, diagnostics) {
-    const weeks = getMonthWeeks(days);
-
-    // 取得某員工在指定 days 陣列內的休/例/國 quota 計數
-    function countRestInDays(dayList, staffId) {
-      const count = { '休': 0, '例': 0, '國': 0 };
-      dayList.forEach(d => {
-        const c = restQuotaCode(assignments[staffId][d.date]);
-        if (count[c] !== undefined) count[c]++;
-      });
-      return count;
-    }
+    repairWeeklyRestQuotas(assignments, staff, days, locked, diagnostics);
 
     staff.forEach(s => {
       if (s.fixedShift) return;
-
-      // 休/例：週內平衡（不可跨週）
-      weeks.forEach(week => {
-        const target休 = week.filter(d => d.dow === 6).length;
-        const target例 = week.filter(d => d.dow === 0).length;
-        const restCodes = ['休', '例'];
-
-        let changed = true;
-        while (changed) {
-          changed = false;
-          const q = countRestInDays(week, s.id);
-          const over  = restCodes.find(code => (code === '休' ? q['休'] > target休 : q['例'] > target例));
-          const short = restCodes.find(code => (code === '休' ? q['休'] < target休 : q['例'] < target例));
-          if (!over || !short) break;
-
-          let best = null;
-          week.forEach((d, relIdx) => {
-            const absIdx = days.indexOf(d);
-            const cur = assignments[s.id][d.date];
-            if (isRestWork(cur)) return;
-            if (cur === '休*') return;
-            if (restQuotaCode(cur) !== over) return;
-            if (isLocked(locked, s.id, d.date)) return;
-
-            const candidate = evaluateMutations(assignments, staff, days, [
-              { staffId: s.id, date: d.date, value: short },
-            ]);
-            if (!candidate || !noHardRuleRegression(candidate.before, candidate.after)) return;
-
-            const score = restRelabelScore(over, short, d, absIdx);
-            if (!best || score < best.score) best = { ...candidate, score };
-          });
-
-          if (!best) break;
-          commitMutations(assignments, best.mutations);
-          changed = true;
-        }
-
-        // 週內 token-over 診斷
-        const qFinal = countRestInDays(week, s.id);
-        if (qFinal['休'] > target休) {
-          addDiagnostic(diagnostics, 'token-over',
-            s, null, `${s.name} 週 ${week[0].date} 「休」過多 ${qFinal['休'] - target休} 個，找不到可重標籤的格`);
-        }
-        if (qFinal['例'] > target例) {
-          addDiagnostic(diagnostics, 'token-over',
-            s, null, `${s.name} 週 ${week[0].date} 「例」過多 ${qFinal['例'] - target例} 個，找不到可重標籤的格`);
-        }
-      });
 
       // 國：保持月全局平衡（不受週限制）
       const monthlyTarget國 = restTargets(days)['國'];
@@ -3332,27 +3711,50 @@ const Scheduler = (() => {
     commitMutations(scratch, baseMutations);
     const codes = ['休','例','國'];
 
-    for (let guard = 0; guard < 6; guard++) {
-      const q = countRestQuotas(scratch, staffMember.id, days);
-      const targets = restTargets(days);
-      const over = codes.find(code => q[code] > targets[code]);
-      const short = codes.find(code => q[code] < targets[code]);
-      if (!over || !short) return out;
+    for (let guard = 0; guard < 8; guard++) {
+      if (staffRestQuotaDeviation(scratch, staffMember.id, days) === 0) return out;
 
       let best = null;
       days.forEach((d, idx) => {
         const cur = scratch[staffMember.id][d.date];
-        if (isRestWork(cur)) return;
-        if (cur === '休*') return;
-        if (restQuotaCode(cur) !== over) return;
+        if (isRestWork(cur) || cur === '休*') return;
         if (isLocked(locked, staffMember.id, d.date)) return;
+        const curQuota = restQuotaCode(cur);
 
-        const mutation = { staffId: staffMember.id, date: d.date, value: short };
-        const candidate = evaluateMutations(assignments, staff, days, out.concat(mutation));
-        if (!candidate || !noHardRuleRegression(candidate.before, candidate.after)) return;
+        if (codes.includes(curQuota)) {
+          codes.forEach(code => {
+            if (code === curQuota) return;
+            const mutation = { staffId: staffMember.id, date: d.date, value: code };
+            const scratch2 = cloneAssignments(scratch, staff, days);
+            commitMutations(scratch2, [mutation]);
+            if (staffRestQuotaDeviation(scratch2, staffMember.id, days) >= staffRestQuotaDeviation(scratch, staffMember.id, days)) return;
 
-        const score = restRelabelScore(over, short, d, idx) + candidate.cost;
-        if (!best || score < best.score) best = { mutation, score };
+            const candidate = evaluateMutations(assignments, staff, days, out.concat(mutation));
+            if (!candidate || !noHardRuleRegression(candidate.before, candidate.after)) return;
+
+            const score = staffRestQuotaDeviation(scratch2, staffMember.id, days) * 100000
+                        + restRelabelScore(curQuota, code, d, idx)
+                        + candidate.cost;
+            if (!best || score < best.score) best = { mutation, score };
+          });
+        }
+
+        if (cur === '白' && isWeekday(d)) {
+          codes.forEach(code => {
+            if (code === '國' && countRestQuotas(scratch, staffMember.id, days)['國'] >= restTargets(days)['國']) return;
+            if (!canReceiveManualOffCode(staffMember, d, code, locked)) return;
+            const mutation = { staffId: staffMember.id, date: d.date, value: code };
+            const scratch2 = cloneAssignments(scratch, staff, days);
+            commitMutations(scratch2, [mutation]);
+            if (staffRestQuotaDeviation(scratch2, staffMember.id, days) >= staffRestQuotaDeviation(scratch, staffMember.id, days)) return;
+
+            const candidate = evaluateMutations(assignments, staff, days, out.concat(mutation));
+            if (!candidate || !noHardRuleRegression(candidate.before, candidate.after)) return;
+
+            const score = staffRestQuotaDeviation(scratch2, staffMember.id, days) * 100000 + idx + candidate.cost;
+            if (!best || score < best.score) best = { mutation, score };
+          });
+        }
       });
 
       if (!best) return null;
@@ -3563,25 +3965,44 @@ const Scheduler = (() => {
     const ensure = (s, code) => {
       if (countCode(s.id, code) > 0) return true;
 
-      // 只在平日找：該員工是 '白'，且該天該班別有人擔任，跟那人 swap
+      let best = null;
       for (let i = 0; i < weekdays.length; i++) {
         const d = weekdays[i];
-        if (assignments[s.id][d.date] !== '白') continue;
+        const cur = assignments[s.id][d.date];
+        if (cur !== '白' && (!cur || !isWork(cur) || isRestWork(cur))) continue;
         if (isLocked(locked, s.id, d.date)) continue;
-        // 找該天上 code 的另一名員工
-        const target = staff.find(x =>
-          x.id !== s.id && !x.fixedShift && workCode(assignments[x.id][d.date]) === code);
-        if (!target) continue;
-        if (isLocked(locked, target.id, d.date)) continue;
-        if (countCode(target.id, code) <= 1) continue;
 
-        const result = tryPatch(assignments, staff, days, [
-          { staffId: s.id, date: d.date, value: code },
-          { staffId: target.id, date: d.date, value: '白' },
-        ], noHardRuleRegression);
-        if (result) return true;
+        staff.forEach(target => {
+          if (target.id === s.id || target.fixedShift) return;
+          if (workCode(assignments[target.id][d.date]) !== code) return;
+          if (isLocked(locked, target.id, d.date)) return;
+          if (countCode(target.id, code) <= 1) return;
+
+          const candidate = evaluateMutations(assignments, staff, days, [
+            { staffId: s.id, date: d.date, value: code },
+            { staffId: target.id, date: d.date, value: cur },
+          ]);
+          let accepted = null;
+          if (candidate && noHardRuleRegression(candidate.before, candidate.after)) {
+            accepted = candidate;
+          } else {
+            accepted = evaluateRepairPackage(assignments, staff, days, locked, [
+              { staffId: s.id, date: d.date, value: code },
+              { staffId: target.id, date: d.date, value: cur },
+            ], noHardRuleRegression, { localRepair: true, tokenAware: true });
+            if (accepted && staffMonthlyNECounts(accepted.assignments, s.id, days)[code] === 0) accepted = null;
+          }
+          if (!accepted) return;
+
+          accepted.focusedNeTransfer = focusedNeTransferPriority(assignments, days, s.id, code);
+          if (betterRepairCandidate(accepted, best)) best = accepted;
+        });
       }
-      return false;
+
+      if (!best) return false;
+      if (best.assignments) replaceAssignments(assignments, best.assignments, staff, days);
+      else commitMutations(assignments, best.mutations);
+      return true;
     };
 
     rotN.forEach(s => {
@@ -3596,6 +4017,179 @@ const Scheduler = (() => {
           `${s.name} 平日未排到 E（小夜）`);
       }
     });
+  }
+
+  function validatorErrorsFor(assignments, staff, days) {
+    if (typeof Validator === 'undefined' || !Validator || typeof Validator.validate !== 'function') return null;
+    return Validator.validate({ year: days[0] ? Number(days[0].date.slice(0, 4)) : null, month: null, days, assignments }, staff);
+  }
+
+  function validatorErrorDates(err, days) {
+    if (!err || !err.date) return [];
+    const idx = days.findIndex(d => d.date === err.date);
+    if (idx < 0) return [err.date];
+
+    if (err.type === 'N-prev-not-off-or-N') {
+      return idx > 0 ? [err.date, days[idx - 1].date] : [err.date];
+    }
+    if (err.type === 'N-next-triangle' || err.type === 'E-bad-next' || err.type === '3-bad-next') {
+      return idx + 1 < days.length ? [err.date, days[idx + 1].date] : [err.date];
+    }
+    return [err.date];
+  }
+
+  function validatorErrorInvolvesLockedCell(err, days, locked) {
+    const dates = validatorErrorDates(err, days);
+    if (dates.length === 0) return false;
+    if (err.staffId) return dates.some(date => isLocked(locked, err.staffId, date));
+
+    return dates.some(date => {
+      const day = days.find(d => d.date === date);
+      return day && (day.rotationGroup === 'regular' || day.rotationGroup === 'national');
+    });
+  }
+
+  function blockingValidatorErrors(errors, days, locked) {
+    return (errors || []).filter(err => !validatorErrorInvolvesLockedCell(err, days, locked));
+  }
+
+  function validatorErrorKey(err) {
+    return [
+      err && err.type || '',
+      err && err.staffId || '',
+      err && err.date || '',
+    ].join('|');
+  }
+
+  function findMonthlyNEChain(assignments, staff, days, locked, receiver, code, depth, seen) {
+    if (depth <= 0 || !receiver || receiver.fixedShift) return null;
+    const errType = code === 'N' ? 'no-weekday-N' : 'no-weekday-E';
+    const receiverKey = `${receiver.id}:${code}`;
+    if (seen.has(receiverKey)) return null;
+    seen.add(receiverKey);
+
+    const weekdays = days.filter(isTrueWeekday);
+    const beforeHardKeys = new Set(
+      blockingValidatorErrors(validatorErrorsFor(assignments, staff, days), days, locked)
+        .filter(e => e.type !== 'no-weekday-N' && e.type !== 'no-weekday-E')
+        .map(validatorErrorKey)
+    );
+
+    for (const d of weekdays) {
+      const cur = assignments[receiver.id][d.date];
+      if (cur !== '白' && (!cur || !isWork(cur) || isRestWork(cur))) continue;
+      if (isLocked(locked, receiver.id, d.date)) continue;
+
+      for (const donor of staff) {
+        if (donor.id === receiver.id || donor.fixedShift) continue;
+        if (isLocked(locked, donor.id, d.date)) continue;
+        if (workCode(assignments[donor.id][d.date]) !== code) continue;
+
+        const scratch = cloneAssignments(assignments, staff, days);
+        scratch[receiver.id][d.date] = code;
+        scratch[donor.id][d.date] = cur;
+        const errs = blockingValidatorErrors(validatorErrorsFor(scratch, staff, days), days, locked);
+        if (!errs) return null;
+
+        const receiverStillMissing = errs.some(e => e.type === errType && e.staffId === receiver.id);
+        if (receiverStillMissing) continue;
+
+        const hardBlocks = errs.filter(e => e.type !== 'no-weekday-N' && e.type !== 'no-weekday-E');
+        if (hardBlocks.some(e => !beforeHardKeys.has(validatorErrorKey(e)))) continue;
+
+        const donorCarry = errs.find(e => e.type === errType && e.staffId === donor.id);
+        if (!donorCarry) return scratch;
+
+        const solved = findMonthlyNEChain(scratch, staff, days, locked, donor, code, depth - 1, new Set(seen));
+        if (solved) return solved;
+      }
+    }
+
+    return null;
+  }
+
+  function repairMonthlyNEChains(assignments, staff, days, locked, diagnostics) {
+    if (typeof Validator === 'undefined' || !Validator || typeof Validator.validate !== 'function') return;
+    const codes = [
+      { code: 'N', type: 'no-weekday-N' },
+      { code: 'E', type: 'no-weekday-E' },
+    ];
+
+    codes.forEach(item => {
+      let guard = 0;
+      while (guard < 10) {
+        guard++;
+        const errs = blockingValidatorErrors(validatorErrorsFor(assignments, staff, days), days, locked);
+        const miss = errs.find(e => e.type === item.type);
+        if (!miss) break;
+        const receiver = staff.find(s => s.id === miss.staffId);
+        const solved = findMonthlyNEChain(assignments, staff, days, locked, receiver, item.code, 12, new Set());
+        if (!solved) break;
+        replaceAssignments(assignments, solved, staff, days);
+      }
+    });
+  }
+
+  function sequenceRepairDayIdx(err, days) {
+    if (!err || !err.date) return -1;
+    const idx = days.findIndex(d => d.date === err.date);
+    if (idx < 0) return -1;
+    if (err.type === 'N-prev-not-off-or-N') return idx > 0 ? idx - 1 : -1;
+    if (err.type === 'E-bad-next' || err.type === '3-bad-next') return idx + 1 < days.length ? idx + 1 : -1;
+    return -1;
+  }
+
+  function findSequenceValidatorChain(assignments, staff, days, locked, err, depth, seen) {
+    if (depth <= 0 || !err || !err.staffId) return null;
+    const dayIdx = sequenceRepairDayIdx(err, days);
+    if (dayIdx < 0) return null;
+    const day = days[dayIdx];
+    const key = `${err.type}:${err.staffId}:${day.date}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    if (isLocked(locked, err.staffId, day.date)) return null;
+
+    const current = assignments[err.staffId][day.date];
+    if (!current) return null;
+
+    for (const other of staff) {
+      if (other.id === err.staffId || other.fixedShift) continue;
+      if (isLocked(locked, other.id, day.date)) continue;
+      const otherCode = assignments[other.id][day.date];
+      if (!otherCode || otherCode === current) continue;
+
+      const scratch = cloneAssignments(assignments, staff, days);
+      scratch[err.staffId][day.date] = otherCode;
+      scratch[other.id][day.date] = current;
+      const errs = blockingValidatorErrors(validatorErrorsFor(scratch, staff, days), days, locked)
+        .filter(e => e.type !== 'no-weekday-N' && e.type !== 'no-weekday-E');
+      if (!errs) return null;
+      if (errs.length === 0) return scratch;
+      if (errs.length !== 1) continue;
+      if (!['N-prev-not-off-or-N','E-bad-next','3-bad-next'].includes(errs[0].type)) continue;
+      const solved = findSequenceValidatorChain(scratch, staff, days, locked, errs[0], depth - 1, new Set(seen));
+      if (solved) return solved;
+    }
+
+    return null;
+  }
+
+  function repairSequenceValidatorChains(assignments, staff, days, locked) {
+    if (typeof Validator === 'undefined' || !Validator || typeof Validator.validate !== 'function') return;
+    let guard = 0;
+    while (guard < 10) {
+      guard++;
+      const errs = blockingValidatorErrors(validatorErrorsFor(assignments, staff, days), days, locked);
+      const err = errs.find(e => {
+        if (!['N-prev-not-off-or-N','E-bad-next','3-bad-next'].includes(e.type)) return false;
+        const repairIdx = sequenceRepairDayIdx(e, days);
+        return repairIdx >= 0 && !isLocked(locked, e.staffId, days[repairIdx].date);
+      });
+      if (!err) break;
+      const solved = findSequenceValidatorChain(assignments, staff, days, locked, err, 6, new Set());
+      if (!solved) break;
+      replaceAssignments(assignments, solved, staff, days);
+    }
   }
 
   function metricsKey(metrics) {
@@ -3650,15 +4244,13 @@ const Scheduler = (() => {
     const appliedHardLocks = {};
     const stages = splitManualRequests(constraints, staff, days);
     const hardLocks = buildLocksFromRequests(stages.hard);
+    const holidayPatternLocks = buildHolidayPatternLocks(assignments, staff, days);
+    const initialLocks = mergeLocks(hardLocks, holidayPatternLocks);
 
     applyManualRequestsByStage(
-      assignments, staff, days, stages.hard, hardLocks, appliedHardLocks, diagnostics, true, 'hard');
+      assignments, staff, days, stages.hard, initialLocks, appliedHardLocks, diagnostics, true, 'hard');
 
-    let locked = mergeLocks(hardLocks, appliedHardLocks);
-    ensureSundayStarCoverage(assignments, staff, days, locked, diagnostics);
-    // 假日/國定假日底稿鎖定：ensureSundayStarCoverage 後才鎖，保留 休* 放置結果
-    const holidayPatternLocks = buildHolidayPatternLocks(assignments, staff, days);
-    locked = mergeLocks(locked, holidayPatternLocks);
+    let locked = mergeLocks(initialLocks, appliedHardLocks);
     rebalanceRestQuotaLabels(assignments, staff, days, locked, diagnostics);
     reconcileDraftRestShortfalls(assignments, staff, days, locked, diagnostics);
     repairCoverageGaps(assignments, staff, days, locked, false);
@@ -3671,8 +4263,16 @@ const Scheduler = (() => {
     stabilizeHardRules(assignments, staff, days, locked, diagnostics, 3);
     const preferenceLocks = buildSatisfiedPreferenceLocks(assignments, stages.work);
     addUnappliedPreferenceDiagnostics(assignments, staff, days, stages.work, diagnostics, locked);
-    ensureMonthlyNE(assignments, staff, days, mergeLocks(locked, preferenceLocks), diagnostics);
-    writeFinalDiagnostics(assignments, staff, days, diagnostics, locked);
+    const finalLocks = mergeLocks(locked, preferenceLocks);
+    ensureMonthlyNE(assignments, staff, days, finalLocks, diagnostics);
+    stabilizeHardRules(assignments, staff, days, finalLocks, diagnostics, 2);
+    ensureMonthlyNE(assignments, staff, days, finalLocks, diagnostics);
+    stabilizeHardRules(assignments, staff, days, finalLocks, diagnostics, 1);
+    repairMonthlyNEChains(assignments, staff, days, finalLocks, diagnostics);
+    repairSequenceValidatorChains(assignments, staff, days, finalLocks);
+    stabilizeHardRules(assignments, staff, days, finalLocks, diagnostics, 1);
+    repairWeeklyRestQuotas(assignments, staff, days, finalLocks, diagnostics);
+    writeFinalDiagnostics(assignments, staff, days, diagnostics, finalLocks);
 
     return { appliedManualLocks: appliedHardLocks, hardLocks, preferenceLocks };
   }
@@ -3697,7 +4297,6 @@ const Scheduler = (() => {
       return schedule;
     }
 
-    const assignments = emptyAssignments(staff, days);
     const diagnostics = [];
 
     // 預檢警告：能排但會有殘餘衝突
@@ -3706,14 +4305,13 @@ const Scheduler = (() => {
       if (typeof console !== 'undefined') console.warn('[Scheduler v2] 預檢警告：', msg);
     });
 
-    // 階段 1：鎖死層
-    preFillFixed(assignments, staff, days);
-
-    // 階段 2：以日為主軸 min-conflicts 底稿
-    generateDraft(assignments, staff, days, {}, diagnostics);
+    const draft = { year: schedule.year, month: schedule.month, days, assignments: null, diagnostics: [] };
+    initPatternDraft(draft, staff, {}, null);
+    const assignments = draft.assignments;
+    (draft.diagnostics || []).forEach(d => diagnostics.push(d));
     if (typeof console !== 'undefined') {
       const c0 = detectConflicts(assignments, staff, days);
-      console.log(`[Scheduler v2] 階段 2 完成：衝突 ${c0.length}, cost ${totalCost(assignments, staff, days).toFixed(2)}`);
+      console.log(`[Scheduler v2] pattern 底稿完成：衝突 ${c0.length}, cost ${totalCost(assignments, staff, days).toFixed(2)}`);
     }
 
     runRepairPipeline(assignments, staff, days, constraints, diagnostics);

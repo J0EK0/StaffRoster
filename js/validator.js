@@ -128,45 +128,20 @@ const Validator = (() => {
 
   // 規則 5a: 週配額 — 每位員工每週：
   //   休數 = 該週週六數，例數 = 該週週日數
-  //   特殊：第一週無平日時，該六/日有上班者允許遞延至第二週
+  //   月初/月末無真平日的邊界短週，若週內缺休/例，允許遞延至相鄰週
   function checkWeeklyRestQuota(schedule, staff, errs) {
     const { days, assignments } = schedule;
-    const weeks = getMonthWeeks(days);
 
     staff.forEach(s => {
       if (s.fixedShift) return;
 
-      // 計算每週有效目標（含特殊情況遞延）
-      const weekTargets = weeks.map(week => ({
-        target休: week.filter(d => d.dow === 6).length,
-        target例: week.filter(d => d.dow === 0).length,
-      }));
+      const state = buildWeeklyRestState(days, assignments, s.id);
 
-      if (weeks.length >= 2) {
-        const week1 = weeks[0];
-        const week1HasWeekday = week1.some(d => d.dow >= 1 && d.dow <= 5);
-        if (!week1HasWeekday) {
-          let overflow休 = 0, overflow例 = 0;
-          week1.forEach(d => {
-            const c = getCode(assignments, s.id, d.date);
-            if (d.dow === 6 && c && isWork(c)) overflow休++;
-            if (d.dow === 0 && c && isWork(c)) overflow例++;
-          });
-          weekTargets[0].target休 -= overflow休;
-          weekTargets[0].target例 -= overflow例;
-          weekTargets[1].target休 += overflow休;
-          weekTargets[1].target例 += overflow例;
-        }
-      }
-
-      weeks.forEach((week, wi) => {
-        const { target休, target例 } = weekTargets[wi];
-        let n休 = 0, n例 = 0;
-        week.forEach(d => {
-          const c = getCode(assignments, s.id, d.date);
-          if (restQuotaCode(c) === '休') n休++;
-          if (c === '例') n例++;
-        });
+      state.weeks.forEach((week, wi) => {
+        const target休 = state.targets[wi]['休'];
+        const target例 = state.targets[wi]['例'];
+        const n休 = state.counts[wi]['休'];
+        const n例 = state.counts[wi]['例'];
         if (n休 !== target休) {
           errs.push({
             type:'wrong-weekly-休-quota',
@@ -217,8 +192,9 @@ const Validator = (() => {
       days.forEach(d => {
         const c = getCode(assignments, s.id, d.date);
         if (c === '◎' && isCircleDay(d)) circles++;
-        if (c === '例') n例++;
-        else if (c === '國') n國++;
+        if (c === '例' || (c === '國' && d.dow === 0)) n例++;
+        if (c === '國') n國++;
+        if (c === '國' && d.dow === 6) actual休++;
         else if (restQuotaCode(c) === '休') {
           actual休++;
           if (isWeekdayRestCreditDay(d)) weekday休++;
@@ -366,7 +342,6 @@ const Validator = (() => {
     });
   }
 
-  // 規則 8: 每位輪班人員在平日（週一至週五，非國定假日）至少要有一個 N 和一個 E
   // 規則 8 (軟性目標): N/E 平日至少各一次 — 引擎達不到時不算違規
   // 診斷由 ensureMonthlyNE 以 addDiagnostic 回報（no-weekday-N / no-weekday-E）
   function checkMonthlyNE(_schedule, _staff, _errs) {
@@ -427,7 +402,7 @@ const Validator = (() => {
     checkWeeklyRestQuota(schedule, staff, errs);  /* 休/例週配額（取代月配額）*/
     checkMonthlyRestQuota(schedule, staff, errs); /* 國的月配額 + 圓圈班 */
     checkDailyCoverage(schedule, staff, errs);
-    checkMonthlyNE(schedule, staff, errs); /* 軟性，已 noop */
+    checkMonthlyNE(schedule, staff, errs);
     checkForbidden(schedule, staff, errs);
     checkDailyLeaveLimit(schedule, staff, errs);
     checkWeekdayOffLimit(schedule, staff, errs);
