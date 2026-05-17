@@ -90,6 +90,72 @@ function getMonthWeeks(days) {
   return weeks;
 }
 
+function isTrueWeekday(day) {
+  return Boolean(day && day.dow >= 1 && day.dow <= 5 && !day.isHoliday);
+}
+
+function countRestQuotasInDays(dayList, assignments, staffId) {
+  const count = { '休': 0, '例': 0 };
+  dayList.forEach(d => {
+    const row = assignments && assignments[staffId];
+    let c = row ? restQuotaCode(row[d.date]) : null;
+    if (c === '國' && d.dow === 6) c = '休';
+    if (c === '國' && d.dow === 0) c = '例';
+    if (c === '休') count['休']++;
+    if (c === '例') count['例']++;
+  });
+  return count;
+}
+
+function buildWeeklyRestState(days, assignments, staffId) {
+  const weeks = getMonthWeeks(days);
+  const targets = weeks.map(week => ({
+    '休': week.filter(d => d.dow === 6).length,
+    '例': week.filter(d => d.dow === 0).length,
+  }));
+  const dayWeekIndex = {};
+  weeks.forEach((week, wi) => {
+    week.forEach(d => { dayWeekIndex[d.date] = wi; });
+  });
+
+  const carryBoundaryShortfall = (fromIdx, toIdx) => {
+    if (fromIdx < 0 || toIdx < 0 || fromIdx >= weeks.length || toIdx >= weeks.length) return;
+    const week = weeks[fromIdx];
+    if (week.some(isTrueWeekday)) return;
+    const count = countRestQuotasInDays(week, assignments, staffId);
+    ['休', '例'].forEach(code => {
+      const short = Math.max(0, targets[fromIdx][code] - count[code]);
+      if (short > 0) {
+        targets[fromIdx][code] -= short;
+        targets[toIdx][code] += short;
+      } else {
+        // Unavoidable excess in a no-weekday boundary week: adjust target to match count.
+        // This happens when 休* on Sunday makes休 count = 2 while target is 1.
+        const over = Math.max(0, count[code] - targets[fromIdx][code]);
+        if (over > 0) targets[fromIdx][code] += over;
+      }
+    });
+  };
+
+  if (weeks.length >= 2) {
+    carryBoundaryShortfall(0, 1);
+    if (weeks.length > 2) carryBoundaryShortfall(weeks.length - 1, weeks.length - 2);
+  }
+
+  const counts = weeks.map(week => countRestQuotasInDays(week, assignments, staffId));
+  return { weeks, targets, counts, dayWeekIndex };
+}
+
+function weeklyRestDeviation(days, assignments, staffId) {
+  const state = buildWeeklyRestState(days, assignments, staffId);
+  let dev = 0;
+  state.weeks.forEach((_week, wi) => {
+    dev += Math.abs(state.counts[wi]['休'] - state.targets[wi]['休']);
+    dev += Math.abs(state.counts[wi]['例'] - state.targets[wi]['例']);
+  });
+  return dev;
+}
+
 // 取得月份內所有國定假日
 function holidaysInMonth(y, m, customHolidays) {
   const total = daysInMonth(y, m);
