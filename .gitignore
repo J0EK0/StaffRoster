@@ -51,3 +51,5 @@ Screenshot*.png
 # Local-only agent notes
 AGENTS.md
 CLAUDE.md
+__pycache__/
+*.pyc
