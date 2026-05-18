@@ -709,19 +709,27 @@
 
   function renderViolations(options = {}) {
     const { showClean = false } = options;
-    const errs = collectRuleIssues();
+    const rawErrs = collectRuleIssues();
     const box = document.getElementById('violations');
     box.classList.remove('ok');
 
     // 高亮違規格子
     clearRuleHighlights();
-    errs.forEach(e => {
+    rawErrs.forEach(e => {
       const staffIds = Array.isArray(e.staffIds) ? e.staffIds : (e.staffId ? [e.staffId] : []);
       staffIds.forEach(staffId => {
         if (!staffId || !e.date) return;
         const td = document.querySelector(`#schedule-table .shift-cell[data-staff-id="${staffId}"][data-date="${e.date}"]`);
         if (td) td.classList.add('violation');
       });
+    });
+
+    // 去重（相同訊息只顯示一次）
+    const seen = new Set();
+    const errs = rawErrs.filter(e => {
+      if (seen.has(e.msg)) return false;
+      seen.add(e.msg);
+      return true;
     });
 
     if (errs.length === 0) {
@@ -733,13 +741,41 @@
         box.classList.add('hidden');
         box.innerHTML = '';
       }
-      return errs;
+      return rawErrs;
     }
+
+    const CATEGORY_LABEL = {
+      'forbidden': '禁忌班',
+      'E-bad-next': '接續違規', '3-bad-next': '接續違規',
+      'N-prev-not-off-or-N': 'N班前置', 'N-next-triangle': 'N後接續',
+      'over-6-consec': '連續超時',
+      'wrong-weekly-休-quota': '週配額', 'wrong-weekly-例-quota': '週配額',
+      'wrong-國-quota': '月配額',
+      'no-guo': '國定假日',
+      'short-coverage': '每日覆蓋', 'duplicate-coverage': '每日覆蓋',
+      'too-many-leave': '請假限額', 'too-many-weekday-off': '平日限額',
+      'holiday-white': '假日白班',
+      'circle-invalid-staff': '圓圈班', 'circle-invalid-day': '圓圈班',
+      'draft-no-candidate': '排班診斷',
+    };
+
+    const groups = new Map();
+    errs.forEach(e => {
+      const label = CATEGORY_LABEL[e.type] || '其他';
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(e);
+    });
+
+    const groupsHtml = Array.from(groups.entries()).map(([label, items]) =>
+      `<div class="violations-group">` +
+      `<div class="violations-group-header">${escapeHtml(label)}<span class="violations-group-count">${items.length}</span></div>` +
+      `<ul>${items.map(e => `<li>${escapeHtml(e.msg)}</li>`).join('')}</ul>` +
+      `</div>`
+    ).join('');
+
     box.classList.remove('hidden');
-    box.innerHTML = `<h4>規則違規 (${errs.length} 項)</h4><ul>${
-      errs.slice(0, 50).map(e => `<li>${escapeHtml(e.msg)}</li>`).join('')
-    }${errs.length > 50 ? `<li>...還有 ${errs.length - 50} 項</li>` : ''}</ul>`;
-    return errs;
+    box.innerHTML = `<h4>規則違規 (${errs.length} 項)</h4>${groupsHtml}`;
+    return rawErrs;
   }
 
   function clearRuleIssueDisplay() {
