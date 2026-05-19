@@ -161,8 +161,8 @@
           alert(`求解超時，回傳目前最佳可行解（${data.solve_time_ms} ms）`);
         }
       } catch (err) {
-        console.error('CP-SAT server error, falling back to JS scheduler:', err);
-        Scheduler.repairSchedule(state.schedule, state.staff, state.constraints);
+        console.error('CP-SAT server error:', err);
+        alert('CP-SAT 後端連線失敗，請確認伺服器是否執行中。');
       } finally {
         btn.disabled = false;
         btn.textContent = originalText;
