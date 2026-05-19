@@ -413,37 +413,20 @@ def _build_objective(
             if v is not None:
                 penalties.append(v.Not())
 
-    # Soft: on weekdays, prefer '請' when user requested it, and penalise
-    # using '請' on cells where the user did NOT request it.  This prevents
-    # the solver from auto-generating 請 (leave) as a system-produced OFF code
-    # when satisfying sequence constraints — it should use 例/休 instead.
+    # Soft: on weekdays, prefer '請' when user requested it (quota compensation may
+    # change it to 例/休; Sat/Sun are hard-locked to 休/例 and need no soft nudge)
     day_dow = {d.date: d.dow for d in days}
-    user_qing_cells: set[tuple] = set()
     for staff_id, date_map in constraints.items():
         for date, code in date_map.items():
             if code != '請':
                 continue
             if (staff_id, date) in locked_holiday_cells:
                 continue
-            if day_dow.get(date) in (0, 6):
+            if day_dow.get(date) in (0, 6):  # Sat/Sun: hard-locked, no soft penalty needed
                 continue
-            user_qing_cells.add((staff_id, date))
             v_qing = x.get(_key(staff_id, date, '請'))
             if v_qing is not None:
-                penalties.append(v_qing.Not())  # prefer keeping 請 when user asked for it
-
-    # Penalise extra 請 on cells the user never requested
-    for s in staff:
-        if is_fixed_staff(s):
-            continue
-        for day in days:
-            if (s.id, day.date) in user_qing_cells:
-                continue
-            if (s.id, day.date) in locked_holiday_cells:
-                continue
-            v_qing = x.get(_key(s.id, day.date, '請'))
-            if v_qing is not None:
-                penalties.append(v_qing)  # discourage solver-generated 請
+                penalties.append(v_qing.Not())
 
     weekdays = [d for d in days if is_true_weekday(d)]
     for s in staff:
