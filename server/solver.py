@@ -33,32 +33,80 @@ def _key(staff_id: str, date: str, code: str) -> tuple:
 
 
 def _allowed_codes_for(s) -> list[str]:
-    """Codes to create variables for a given staff member (day-independent)."""
-    if is_circle_staff(s):
-        return ['◎', '休', '例', '國', '請']
-    if is_fixed_staff(s):
-        return [s.fixedShift, '休', '例', '國', '請']
-    # Rotation staff: all codes except ◎
+    """Codes to create variables for a rotation staff member."""
     return [c for c in ALL_CODES if c != '◎']
+
+
+# ---------------------------------------------------------------------------
+# Holiday rotation lock detection
+# ---------------------------------------------------------------------------
+
+def _find_rotation_holiday_locks(
+    draft: Draft, rotation_staff, days
+) -> dict[str, dict[str, str]]:
+    """
+    Identify non-default Sat/Sun/holiday cells in the draft.
+    These represent rotation-assigned holiday shifts that must be hard-locked:
+      - Cannot be changed by the solver
+      - Forbidden-shift rules are skipped for these cells
+      - Sequence constraints FROM these cells are skipped
+      - User leave requests on these days are overridden
+
+    Default codes (what the draft would have if no rotation assigned):
+      - Sat (dow=6)     → '休'
+      - Sun (dow=0)     → '例'
+      - Holiday         → '國'
+    """
+    locks: dict[str, dict[str, str]] = {}
+    for s in rotation_staff:
+        staff_draft = draft.get(s.id, {})
+        for d in days:
+            if not is_holiday_like(d):
+                continue
+            code = staff_draft.get(d.date)
+            if code is None:
+                continue
+            if d.isHoliday:
+                default = '國'
+            elif d.dow == 6:
+                default = '休'
+            else:  # Sunday
+                default = '例'
+            if code != default:
+                locks.setdefault(s.id, {})[d.date] = code
+    return locks
 
 
 # ---------------------------------------------------------------------------
 # Constraint builders
 # ---------------------------------------------------------------------------
 
-def _add_sequence_constraints(model: cp_model.CpModel, x: Xmap, staff, days):
-    """N前置, N不接△, E/3接續 all in one pass."""
+def _add_sequence_constraints(
+    model: cp_model.CpModel, x: Xmap, staff, days,
+    locked_holiday_cells: set[tuple],
+):
+    """N前置, N不接△, E/3接續 all in one pass.
+
+    Constraints FROM a locked holiday cell are skipped — the cell is
+    immutable so adding outgoing constraints would risk INFEASIBLE.
+    """
     off_and_n = OFF_SET | {'N', '休N'}
 
     for s in staff:
         for i, day in enumerate(days):
+            is_locked = (s.id, day.date) in locked_holiday_cells
+
             # --- N前置: prev must be OFF or N ---
+            # This is a constraint ON the current N cell (incoming), not outgoing.
+            # We skip it only if the current cell is locked (can't be changed anyway).
             for n_code in ('N', '休N'):
                 nv = x.get(_key(s.id, day.date, n_code))
                 if nv is None:
                     continue
                 if i == 0:
                     continue  # no prev context — JS validator skips this too
+                if is_locked:
+                    continue  # locked holiday N: accept any preceding cell
                 prev = days[i - 1]
                 prev_ok = [
                     x[_key(s.id, prev.date, c)]
@@ -70,8 +118,8 @@ def _add_sequence_constraints(model: cp_model.CpModel, x: Xmap, staff, days):
                 else:
                     model.add(nv == 0)
 
-            # --- N不接△ ---
-            if i < len(days) - 1:
+            # --- N不接△: FROM current day (skip if locked) ---
+            if i < len(days) - 1 and not is_locked:
                 nxt = days[i + 1]
                 tri = x.get(_key(s.id, nxt.date, '△'))
                 if tri is not None:
@@ -80,8 +128,8 @@ def _add_sequence_constraints(model: cp_model.CpModel, x: Xmap, staff, days):
                         if nv is not None:
                             model.add(tri == 0).only_enforce_if(nv)
 
-            # --- E/3接續 ---
-            if i < len(days) - 1:
+            # --- E/3接續: FROM current day (skip if locked) ---
+            if i < len(days) - 1 and not is_locked:
                 nxt = days[i + 1]
                 for base, checker in (('E', allowed_after_e), ('3', allowed_after_3)):
                     src_codes = [base, '休E'] if base == 'E' else [base]
@@ -114,12 +162,18 @@ def _add_max_consecutive(model: cp_model.CpModel, x: Xmap, staff, days):
                 model.add(sum(work_vars) <= 6)
 
 
-def _add_weekly_quota(model: cp_model.CpModel, x: Xmap, staff, days, draft: Draft):
+def _add_weekly_quota(
+    model: cp_model.CpModel, x: Xmap, staff, days, draft: Draft,
+    rotation_holiday_locks: dict[str, dict[str, str]],
+):
     """Weekly 休/例 quota per rotation staff member.
 
-    Mirrors checkWeeklyRestQuota + buildWeeklyRestState in JS.
-    '休' target = Saturdays in week; '例' target = Sundays in week (with boundary carry).
-    '國' on Saturday counts toward 休; '國' on Sunday counts toward 例.
+    kyu (休) bucket: 休/休N/休E/休* on any day; 國 on Saturday.
+    rei (例) bucket: 例 on any day; 國 on Sunday.
+
+    '請' is NOT counted here — _add_user_constraints hard-locks
+    Saturday 請 → 休 and Sunday 請 → 例, so the solver naturally
+    satisfies both CP-SAT quota and the JS validator.
     """
     for s in staff:
         if is_fixed_staff(s):
@@ -128,7 +182,7 @@ def _add_weekly_quota(model: cp_model.CpModel, x: Xmap, staff, days, draft: Draf
         for wt in week_targets:
             # --- 休 ---
             kyu_vars = []
-            seen = set()
+            seen: set = set()
             for d in wt.days:
                 for c in ALL_CODES:
                     k = _key(s.id, d.date, c)
@@ -136,9 +190,9 @@ def _add_weekly_quota(model: cp_model.CpModel, x: Xmap, staff, days, draft: Draf
                     if v is None or k in seen:
                         continue
                     rq = rest_quota_code(c)
-                    if rq == '休':       # 休, 休N, 休E, 休*
+                    if rq == '休':                          # 休, 休N, 休E, 休*
                         kyu_vars.append(v); seen.add(k)
-                    elif c == '國' and d.dow == 6:  # 國 on Saturday → 休
+                    elif c == '國' and d.dow == 6:          # 國 on Saturday
                         kyu_vars.append(v); seen.add(k)
             if kyu_vars:
                 model.add(sum(kyu_vars) == wt.target_kyu)
@@ -147,13 +201,11 @@ def _add_weekly_quota(model: cp_model.CpModel, x: Xmap, staff, days, draft: Draf
             rei_vars = []
             seen = set()
             for d in wt.days:
-                # '例' itself
                 k_rei = _key(s.id, d.date, '例')
                 if k_rei in x and k_rei not in seen:
                     rei_vars.append(x[k_rei]); seen.add(k_rei)
-                # '國' on Sunday → 例
                 if d.dow == 0:
-                    k_guo = _key(s.id, d.date, '國')
+                    k_guo = _key(s.id, d.date, '國')       # 國 on Sunday → 例
                     if k_guo in x and k_guo not in seen:
                         rei_vars.append(x[k_guo]); seen.add(k_guo)
             if rei_vars:
@@ -206,13 +258,22 @@ def _add_daily_coverage(model: cp_model.CpModel, x: Xmap, staff, days):
                 model.add_exactly_one(covering)
 
 
-def _add_forbidden(model: cp_model.CpModel, x: Xmap, staff, days):
-    """Staff cannot be assigned their forbidden codes."""
+def _add_forbidden(
+    model: cp_model.CpModel, x: Xmap, staff, days,
+    locked_holiday_cells: set[tuple],
+):
+    """Staff cannot be assigned their forbidden codes.
+
+    Locked holiday rotation cells are exempt — the rotation assignment
+    wins even if it conflicts with the forbidden list.
+    """
     for s in staff:
         if not s.forbidden:
             continue
         fset = set(s.forbidden)
         for day in days:
+            if (s.id, day.date) in locked_holiday_cells:
+                continue
             for c in ALL_CODES:
                 if c in fset or effective_work_code(c) in fset:
                     v = x.get(_key(s.id, day.date, c))
@@ -223,11 +284,9 @@ def _add_forbidden(model: cp_model.CpModel, x: Xmap, staff, days):
 def _add_daily_limits(model: cp_model.CpModel, x: Xmap, staff, days):
     """請假 ≤ 4/day and OFF ≤ 4/weekday."""
     for day in days:
-        # 請假 limit (all days)
         leave = [x[_key(s.id, day.date, '請')] for s in staff if _key(s.id, day.date, '請') in x]
         if leave:
             model.add(sum(leave) <= MAX_DAILY_LEAVE)
-        # Weekday OFF limit
         if not is_holiday_like(day):
             off_vars = [
                 x[_key(s.id, day.date, c)]
@@ -239,50 +298,88 @@ def _add_daily_limits(model: cp_model.CpModel, x: Xmap, staff, days):
                 model.add(sum(off_vars) <= MAX_DAILY_LEAVE)
 
 
-def _add_holiday_no_white(model: cp_model.CpModel, x: Xmap, staff, days):
-    """No '白' on holiday-like days for rotation staff."""
+def _add_holiday_no_white(
+    model: cp_model.CpModel, x: Xmap, staff, days,
+    locked_holiday_cells: set[tuple],
+):
+    """No '白' on holiday-like days for rotation staff.
+
+    Locked holiday cells are exempt (their code is already locked to something else).
+    """
     for day in days:
         if not is_holiday_like(day):
             continue
         for s in staff:
             if is_fixed_staff(s):
                 continue
+            if (s.id, day.date) in locked_holiday_cells:
+                continue
             v = x.get(_key(s.id, day.date, '白'))
             if v is not None:
                 model.add(v == 0)
 
 
-def _lock_fixed_staff(
-    model: cp_model.CpModel, x: Xmap, staff, days, draft: Draft,
-    user_locked: set[tuple],
+def _add_rest_star_sunday_only(
+    model: cp_model.CpModel, x: Xmap, staff, days,
+    locked_holiday_cells: set[tuple],
 ):
-    """
-    Lock fixed-shift and circle staff to their draft values.
-    User constraints take precedence (those cells are skipped).
+    """'休*' can only appear on Sundays (dow == 0).
+
+    Locked holiday cells are exempt (should not occur on non-Sundays in practice).
     """
     for s in staff:
-        if not is_fixed_staff(s):
-            continue
         for day in days:
-            if (s.id, day.date) in user_locked:
-                continue
-            draft_code = draft.get(s.id, {}).get(day.date)
-            if draft_code is None:
-                continue
-            v = x.get(_key(s.id, day.date, draft_code))
-            if v is not None:
-                model.add(v == 1)
+            if day.dow != 0:
+                if (s.id, day.date) in locked_holiday_cells:
+                    continue
+                v = x.get(_key(s.id, day.date, '休*'))
+                if v is not None:
+                    model.add(v == 0)
 
 
 def _add_user_constraints(
-    model: cp_model.CpModel, x: Xmap, constraints: dict[str, dict[str, str]]
+    model: cp_model.CpModel, x: Xmap,
+    constraints: dict[str, dict[str, str]],
+    locked_holiday_cells: set[tuple],
+    day_dow: dict[str, int],
 ):
-    """Lock user-specified preferences."""
+    """Lock user-specified preferences.
+
+    Locked holiday rotation cells take priority — rotation work shift wins.
+
+    For '請' constraints:
+      - Saturday: hard-lock to '休'  (JS validator counts 休 as kyu)
+      - Sunday:   hard-lock to '例'  (JS validator counts 例 as rei)
+      - Weekday:  any OFF code       (solver may use 例/休 for rotation-lock
+                                      quota compensation on nearby weekdays)
+    Aligns CP-SAT quota logic with JS countRestQuotasInDays.
+    """
     for staff_id, date_map in constraints.items():
         for date, code in date_map.items():
-            v = x.get(_key(staff_id, date, code))
-            if v is not None:
-                model.add(v == 1)
+            if (staff_id, date) in locked_holiday_cells:
+                continue  # rotation lock wins
+            if code == '請':
+                dow = day_dow.get(date, -1)
+                if dow == 6:    # Saturday → 休
+                    v = x.get(_key(staff_id, date, '休'))
+                    if v is not None:
+                        model.add(v == 1)
+                elif dow == 0:  # Sunday → 例
+                    v = x.get(_key(staff_id, date, '例'))
+                    if v is not None:
+                        model.add(v == 1)
+                else:           # Weekday → any OFF code
+                    off_vars = [
+                        x[_key(staff_id, date, c)]
+                        for c in OFF_SET
+                        if _key(staff_id, date, c) in x
+                    ]
+                    if off_vars:
+                        model.add(sum(off_vars) == 1)
+            else:
+                v = x.get(_key(staff_id, date, code))
+                if v is not None:
+                    model.add(v == 1)
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +389,11 @@ def _add_user_constraints(
 def _build_objective(
     model: cp_model.CpModel, x: Xmap, staff, days,
     draft: Draft, user_locked: set[tuple],
+    constraints: dict[str, dict[str, str]],
+    locked_holiday_cells: set[tuple],
 ):
-    """Minimise draft deviations (weight 1) + missing weekday N/E (weight 5)."""
+    """Minimise draft deviations (weight 1) + missing weekday N/E (weight 5)
+    + weekday 請 substituted by 例/休 (weight 1, prefer keeping '請' on weekdays)."""
     penalties = []
 
     for s in staff:
@@ -308,7 +408,21 @@ def _build_objective(
             if v is not None:
                 penalties.append(v.Not())
 
-    # Soft goal: each rotation staff ≥1 weekday N and ≥1 weekday E
+    # Soft: on weekdays, prefer '請' when user requested it (quota compensation may
+    # change it to 例/休; Sat/Sun are hard-locked to 休/例 and need no soft nudge)
+    day_dow = {d.date: d.dow for d in days}
+    for staff_id, date_map in constraints.items():
+        for date, code in date_map.items():
+            if code != '請':
+                continue
+            if (staff_id, date) in locked_holiday_cells:
+                continue
+            if day_dow.get(date) in (0, 6):  # Sat/Sun: hard-locked, no soft penalty needed
+                continue
+            v_qing = x.get(_key(staff_id, date, '請'))
+            if v_qing is not None:
+                penalties.append(v_qing.Not())
+
     weekdays = [d for d in days if is_true_weekday(d)]
     for s in staff:
         if is_fixed_staff(s):
@@ -336,20 +450,25 @@ def _build_objective(
 
 def _extract_solution(
     solver: cp_model.CpSolver, x: Xmap, staff, days, draft: Draft,
+    constraints: Optional[dict] = None,
 ) -> dict[str, dict[str, Optional[str]]]:
     result: dict[str, dict[str, Optional[str]]] = {}
     for s in staff:
         row: dict[str, Optional[str]] = {}
         for day in days:
-            assigned: Optional[str] = None
-            for c in ALL_CODES:
-                v = x.get(_key(s.id, day.date, c))
-                if v is not None and solver.value(v) == 1:
-                    assigned = c
-                    break
-            if assigned is None:
-                assigned = draft.get(s.id, {}).get(day.date)
-            row[day.date] = assigned
+            if is_fixed_staff(s):
+                user_val = (constraints or {}).get(s.id, {}).get(day.date)
+                row[day.date] = user_val if user_val is not None else draft.get(s.id, {}).get(day.date)
+            else:
+                assigned: Optional[str] = None
+                for c in ALL_CODES:
+                    v = x.get(_key(s.id, day.date, c))
+                    if v is not None and solver.value(v) == 1:
+                        assigned = c
+                        break
+                if assigned is None:
+                    assigned = draft.get(s.id, {}).get(day.date)
+                row[day.date] = assigned
         result[s.id] = row
     return result
 
@@ -375,20 +494,33 @@ def repair_schedule(req: RepairRequest) -> RepairResponse:
     days        = schedule.days
     draft       = schedule.assignments
 
-    # Cells locked by user preferences
     user_locked: set[tuple] = {
         (s_id, date)
         for s_id, d_map in constraints.items()
         for date in d_map
     }
 
+    rotation_staff = [s for s in staff if not is_fixed_staff(s)]
+
+    # ------------------------------------------------------------------
+    # Identify holiday rotation locks from draft
+    # ------------------------------------------------------------------
+    rotation_holiday_locks = _find_rotation_holiday_locks(draft, rotation_staff, days)
+    locked_holiday_cells: set[tuple] = {
+        (sid, date)
+        for sid, d_map in rotation_holiday_locks.items()
+        for date in d_map
+    }
+
+    day_dow: dict[str, int] = {d.date: d.dow for d in days}
+
     model = cp_model.CpModel()
 
     # ------------------------------------------------------------------
-    # 1. Build variables + AddExactlyOne per (staff, day)
+    # 1. Build variables + AddExactlyOne per (rotation staff, day)
     # ------------------------------------------------------------------
     x: Xmap = {}
-    for s in staff:
+    for s in rotation_staff:
         allowed = _allowed_codes_for(s)
         for day in days:
             domain = []
@@ -400,29 +532,38 @@ def repair_schedule(req: RepairRequest) -> RepairResponse:
                 model.add_exactly_one(domain)
 
     # ------------------------------------------------------------------
-    # 2. Hard constraints
+    # 2a. Hard-lock holiday rotation cells
     # ------------------------------------------------------------------
-    _add_sequence_constraints(model, x, staff, days)
-    _add_max_consecutive(model, x, staff, days)
-    _add_weekly_quota(model, x, staff, days, draft)
-    _add_monthly_guo_quota(model, x, staff, days)
-    _add_no_guo_rule(model, x, staff, days)
-    _add_daily_coverage(model, x, staff, days)
-    _add_forbidden(model, x, staff, days)
-    _add_daily_limits(model, x, staff, days)
-    _add_holiday_no_white(model, x, staff, days)
-    _lock_fixed_staff(model, x, staff, days, draft, user_locked)
-    _add_user_constraints(model, x, constraints)
+    for sid, d_map in rotation_holiday_locks.items():
+        for date, code in d_map.items():
+            v = x.get(_key(sid, date, code))
+            if v is not None:
+                model.add(v == 1)
+
+    # ------------------------------------------------------------------
+    # 2b. Hard constraints (rotation staff only)
+    # ------------------------------------------------------------------
+    _add_sequence_constraints(model, x, rotation_staff, days, locked_holiday_cells)
+    _add_max_consecutive(model, x, rotation_staff, days)
+    _add_weekly_quota(model, x, rotation_staff, days, draft, rotation_holiday_locks)
+    _add_monthly_guo_quota(model, x, rotation_staff, days)
+    _add_no_guo_rule(model, x, rotation_staff, days)
+    _add_daily_coverage(model, x, rotation_staff, days)
+    _add_forbidden(model, x, rotation_staff, days, locked_holiday_cells)
+    _add_daily_limits(model, x, rotation_staff, days)
+    _add_holiday_no_white(model, x, rotation_staff, days, locked_holiday_cells)
+    _add_rest_star_sunday_only(model, x, rotation_staff, days, locked_holiday_cells)
+    _add_user_constraints(model, x, constraints, locked_holiday_cells, day_dow)
 
     # ------------------------------------------------------------------
     # 3. Objective
     # ------------------------------------------------------------------
-    _build_objective(model, x, staff, days, draft, user_locked)
+    _build_objective(model, x, rotation_staff, days, draft, user_locked, constraints, locked_holiday_cells)
 
     # ------------------------------------------------------------------
-    # 4. Hint: seed solver with the draft values so it starts near-feasible
+    # 4. Hint: seed solver with draft values
     # ------------------------------------------------------------------
-    for s in staff:
+    for s in rotation_staff:
         row = draft.get(s.id, {})
         for day in days:
             draft_code = row.get(day.date)
@@ -446,14 +587,13 @@ def repair_schedule(req: RepairRequest) -> RepairResponse:
 
     diagnostics: list[dict] = []
     if status_code in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        assignments = _extract_solution(solver, x, staff, days, draft)
+        assignments = _extract_solution(solver, x, staff, days, draft, constraints)
         if status == 'TIMEOUT':
             diagnostics.append({
                 'type': 'solver-timeout', 'staffId': None, 'name': None, 'date': None,
                 'msg': f'CP-SAT 求解超時，回傳目前最佳可行解（{elapsed_ms} ms）',
             })
     else:
-        # Return draft unchanged so the UI doesn't break
         assignments = {s.id: dict(draft.get(s.id, {})) for s in staff}
         diagnostics.append({
             'type': 'solver-infeasible', 'staffId': None, 'name': None, 'date': None,
