@@ -176,15 +176,30 @@ def _add_weekly_quota(
     kyu (休) bucket: 休/休N/休E/休* on any day; 國 on Saturday.
     rei (例) bucket: 例 on any day; 國 on Sunday.
 
-    '請' is NOT counted here — _add_user_constraints hard-locks
-    Saturday 請 → 休 and Sunday 請 → 例, so the solver naturally
-    satisfies both CP-SAT quota and the JS validator.
+    When a Saturday or Sunday is rotation-locked to a WORK code the
+    person is working that day instead of resting, so the week's
+    target is reduced by 1 for that slot — otherwise the solver would
+    be asked to produce an impossible extra rest day inside the week.
     """
     for s in staff:
         if is_fixed_staff(s):
             continue
         week_targets = compute_weekly_targets(days, draft, s.id)
+        s_locks = rotation_holiday_locks.get(s.id, {})
+
         for wt in week_targets:
+            # Adjust targets for rotation-locked work shifts on Sat/Sun.
+            target_kyu = wt.target_kyu
+            target_rei = wt.target_rei
+            for d in wt.days:
+                locked_code = s_locks.get(d.date)
+                if locked_code is None:
+                    continue
+                if d.dow == 6 and is_work(locked_code):   # Sat locked to work → no 休 that day
+                    target_kyu = max(0, target_kyu - 1)
+                elif d.dow == 0 and is_work(locked_code): # Sun locked to work → no 例 that day
+                    target_rei = max(0, target_rei - 1)
+
             # --- 休 ---
             kyu_vars = []
             seen: set = set()
@@ -200,7 +215,7 @@ def _add_weekly_quota(
                     elif c == '國' and d.dow == 6:          # 國 on Saturday
                         kyu_vars.append(v); seen.add(k)
             if kyu_vars:
-                model.add(sum(kyu_vars) == wt.target_kyu)
+                model.add(sum(kyu_vars) == target_kyu)
 
             # --- 例 ---
             rei_vars = []
@@ -214,7 +229,7 @@ def _add_weekly_quota(
                     if k_guo in x and k_guo not in seen:
                         rei_vars.append(x[k_guo]); seen.add(k_guo)
             if rei_vars:
-                model.add(sum(rei_vars) == wt.target_rei)
+                model.add(sum(rei_vars) == target_rei)
 
 
 def _add_monthly_guo_quota(model: cp_model.CpModel, x: Xmap, staff, days):
