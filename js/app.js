@@ -136,8 +136,37 @@
     document.getElementById('btn-rotation-modal').addEventListener('click', () => {
       openRotationModal();
     });
-    document.getElementById('btn-auto-fill').addEventListener('click', () => {
-      Scheduler.repairSchedule(state.schedule, state.staff, state.constraints);
+    document.getElementById('btn-auto-fill').addEventListener('click', async () => {
+      const btn = document.getElementById('btn-auto-fill');
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '排班中…';
+      try {
+        const res = await fetch('http://localhost:8000/api/repair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            schedule: state.schedule,
+            staff: state.staff,
+            constraints: state.constraints,
+          }),
+        });
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        const data = await res.json();
+        state.schedule.assignments = data.assignments;
+        state.schedule.diagnostics = data.diagnostics || [];
+        if (data.status === 'INFEASIBLE') {
+          alert('CP-SAT 無法找到可行排班。請檢查偏好或禁忌班設定。');
+        } else if (data.status === 'TIMEOUT') {
+          alert(`求解超時，回傳目前最佳可行解（${data.solve_time_ms} ms）`);
+        }
+      } catch (err) {
+        console.error('CP-SAT server error, falling back to JS scheduler:', err);
+        Scheduler.repairSchedule(state.schedule, state.staff, state.constraints);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
       normalizeAllCircleBalance();
       state.showRuleIssues = true;
       if (window.Stepper) window.Stepper.mark('repair');
