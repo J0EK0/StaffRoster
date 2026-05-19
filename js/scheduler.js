@@ -638,20 +638,36 @@ const Scheduler = (() => {
         const hasRotData = rotData && holidayStaff.some(s => rotData[s.id] && rotData[s.id][day.date]);
 
         if (hasRotData) {
+          // Apply explicit rotation data for holiday/weekend cells.
+          // Forbidden-shift filter is intentionally absent: rotation holiday assignments
+          // are hard-locked by the CP-SAT solver and override forbidden rules for those cells.
           holidayStaff.forEach(s => {
             const code = rotData[s.id] && rotData[s.id][day.date];
-            if (code) {
-              assignments[s.id][day.date] = code;
-              assigned.add(s.id);
+            if (!code) return;
+            const wc = workCode(code);
+            // Sequence checks only when prev day is also a holiday cell:
+            // weekday prev may be changed to off by constraints, repair can fix those.
+            if (dayIdx > 0) {
+              const prevDay = days[dayIdx - 1];
+              const prevIsHoliday = prevDay.rotationGroup === 'regular' || prevDay.rotationGroup === 'national';
+              if (prevIsHoliday) {
+                const prevCode = assignments[s.id][prevDay.date];
+                const prevWc = prevCode ? workCode(prevCode) : null;
+                if (wc === 'N' && prevCode !== null && !isOff(prevCode) && prevWc !== 'N') return;
+                if (prevWc === 'E' && !isAllowedAfterE(code)) return;
+                if (prevWc === '3' && !isAllowedAfter3(code)) return;
+              }
             }
+            assignments[s.id][day.date] = code;
+            assigned.add(s.id);
           });
-        } else {
-          const pattern = (day.dow === 0) ? SUNDAY_PATTERN : HOLIDAY_PATTERN;
-          pattern.forEach((code, idx) => {
-            placePatternCode(assignments, staff, holidayStaff, day, holidayOffset, idx, code, assigned, locked, days, dayIdx);
-          });
-          holidayOffset = (holidayOffset + 1) % Math.max(holidayStaff.length, 1);
         }
+        // Always run pattern fill: fills skipped slots (forbidden/sequence) and no-data days alike.
+        const pattern = (day.dow === 0) ? SUNDAY_PATTERN : HOLIDAY_PATTERN;
+        pattern.forEach((code, idx) => {
+          placePatternCode(assignments, staff, holidayStaff, day, holidayOffset, idx, code, assigned, locked, days, dayIdx);
+        });
+        holidayOffset = (holidayOffset + 1) % Math.max(holidayStaff.length, 1);
       }
     });
   }
@@ -1024,6 +1040,28 @@ const Scheduler = (() => {
         && after.dailyOffOver <= before.dailyOffOver;
   }
 
+  function phase1CoverageAccept(before, after) {
+    return after.gaps < before.gaps
+        && after.hard <= before.hard
+        && after.dups <= before.dups
+        && after.dailyOffOver <= before.dailyOffOver;
+  }
+
+  function compoundOffAccept(before, after) {
+    return after.gaps < before.gaps
+        && after.hard <= before.hard
+        && after.dups <= before.dups
+        && after.dailyOffOver <= before.dailyOffOver
+        && after.quotaDev <= before.quotaDev + 1;
+  }
+
+  function buildDayWeekIndex(days) {
+    const weeks = getMonthWeeks(days);
+    const idx = {};
+    weeks.forEach((week, wi) => week.forEach(d => { idx[d.date] = wi; }));
+    return { idx, weeks };
+  }
+
   function mutationTouchesLocked(mutations, locked) {
     return (mutations || []).some(m => isLocked(locked, m.staffId, m.date));
   }
@@ -1344,9 +1382,9 @@ const Scheduler = (() => {
     if (!canReceiveWorkCode(assignments, staffMember, days, dayIdx, code, locked)) return [];
 
     const cur = assignments[staffMember.id][day.date];
-    if (!isRestToken(cur) || cur === '休*') return [];
+    if (!isOff(cur) || cur === '請' || cur === '休*') return [];
 
-    const restCode = restQuotaCode(cur);
+    const restCode = isRestToken(cur) ? restQuotaCode(cur) : cur;
     const out = [];
     days.forEach((compDay, compIdx) => {
       if (compIdx === dayIdx || !isWeekday(compDay)) return;
@@ -1475,6 +1513,7 @@ const Scheduler = (() => {
 
   function collectCoverageRepairCandidate(assignments, staff, days, locked) {
     let best = null;
+    const { idx: weekIdx, weeks: weekLists } = buildDayWeekIndex(days);
 
     coverageGaps(assignments, staff, days).forEach(gap => {
       staff.forEach(s => {
@@ -1496,6 +1535,78 @@ const Scheduler = (() => {
 
           const bridge = buildWhiteBridgeCoverageCandidate(assignments, staff, days, locked, s, gap);
           if (bridge && betterCoverageCandidate(bridge, best)) best = bridge;
+
+          // Compound fix: E/3 gap where simple upgrade fails (E-bad-next on the next 白).
+          // (A) try 7 on next day — no quota impact.
+          // (B) 3-mutation: E + 例 on next day + relocate an existing 例 in same week → quota-neutral.
+          // (C) cross-person: same as (B) but borrow 例 from another staff's same day.
+          const gapWc = workCode(gap.code);
+          if (gapWc === 'E' || gapWc === '3') {
+            const nextIdx = gap.dayIdx + 1;
+            if (nextIdx < days.length && isWeekday(days[nextIdx]) &&
+                assignments[s.id][days[nextIdx].date] === '白' &&
+                !isLocked(locked, s.id, days[nextIdx].date)) {
+              let compound = null;
+
+              // (A) try 7 — no quota change
+              compound = evaluateManualMutations(assignments, staff, days, locked, [
+                { staffId: s.id, date: gap.date, value: gap.code },
+                { staffId: s.id, date: days[nextIdx].date, value: '7' },
+              ], manualCoverageAccept);
+
+              if (!compound) {
+                // (B) 3-mutation: move existing 例/休 in same week to nextIdx
+                const wi = weekIdx[gap.date];
+                const sameWeekDays = weekLists[wi] || [];
+                const freeRest = sameWeekDays.find(d => {
+                  if (d.date === gap.date || d.date === days[nextIdx].date) return false;
+                  if (isLocked(locked, s.id, d.date)) return false;
+                  return isRestToken(assignments[s.id][d.date]);
+                });
+                if (freeRest) {
+                  const followCode = assignments[s.id][freeRest.date];
+                  compound = evaluateManualMutations(assignments, staff, days, locked, [
+                    { staffId: s.id, date: gap.date, value: gap.code },
+                    { staffId: s.id, date: days[nextIdx].date, value: followCode },
+                    { staffId: s.id, date: freeRest.date, value: '白' },
+                  ], manualCoverageAccept);
+                }
+              }
+
+              if (!compound) {
+                // (C) cross-person: other staff has 例/休 on nextIdx, swap it
+                for (const other of staff) {
+                  if (other.id === s.id || other.fixedShift) continue;
+                  if (isLocked(locked, other.id, days[nextIdx].date)) continue;
+                  const otherCode = assignments[other.id][days[nextIdx].date];
+                  if (!isRestToken(otherCode) || otherCode === '休*') continue;
+                  compound = evaluateManualMutations(assignments, staff, days, locked, [
+                    { staffId: s.id, date: gap.date, value: gap.code },
+                    { staffId: s.id, date: days[nextIdx].date, value: otherCode },
+                    { staffId: other.id, date: days[nextIdx].date, value: '白' },
+                  ], manualCoverageAccept);
+                  if (compound) break;
+                }
+              }
+
+              if (!compound) {
+                // (D) last-resort: accept one quotaDev increase to get E off-next satisfied
+                for (const followCode of ['例', '休']) {
+                  compound = evaluateManualMutations(assignments, staff, days, locked, [
+                    { staffId: s.id, date: gap.date, value: gap.code },
+                    { staffId: s.id, date: days[nextIdx].date, value: followCode },
+                  ], compoundOffAccept);
+                  if (compound) break;
+                }
+              }
+
+              if (compound) {
+                compound.focusedNeTransfer = focusedNeTransferPriority(assignments, days, s.id, gap.code);
+                compound.score = coverageCandidateScore(assignments, s.id, days, gap.dayIdx, gap.code, 3000);
+                if (betterCoverageCandidate(compound, best)) best = compound;
+              }
+            }
+          }
           return;
         }
 
@@ -1519,7 +1630,6 @@ const Scheduler = (() => {
     const MAX_ITER = 100;
     let iter = 0;
     let applied = 0;
-
     while (iter < MAX_ITER) {
       iter++;
       const before = scheduleMetrics(assignments, staff, days);
@@ -2910,7 +3020,7 @@ const Scheduler = (() => {
       if (assignments[fromStaff.id][d.date] !== code) return;
 
       const partnerCode = assignments[toStaff.id][d.date];
-      if (!partnerCode || isRestToken(partnerCode)) return;
+      if (!partnerCode || isOff(partnerCode)) return;
       if (partnerCode !== '白') {
         if ((fromStaff.forbidden || []).includes(partnerCode) || (fromStaff.forbidden || []).includes(workCode(partnerCode))) return;
         if (!dayRequirements(d.dow, d.isHoliday).includes(coverageCode(partnerCode))) return;
@@ -4238,6 +4348,82 @@ const Scheduler = (() => {
       });
     });
     return locked;
+  }
+
+  function convertRestToPlaceholders(assignments, staff, days, locked) {
+    staff.forEach(s => {
+      if (s.fixedShift) return;
+      days.forEach(day => {
+        if (isLocked(locked, s.id, day.date)) return;
+        const v = assignments[s.id][day.date];
+        if (v === '休' || v === '例' || v === '休*') {
+          assignments[s.id][day.date] = '○';
+        }
+      });
+    });
+  }
+
+  function applyRestLabels(assignments, staff, days, locked, diagnostics) {
+    // Step 1: E-next-day ○ → 例 (must be off after E)
+    staff.forEach(s => {
+      if (s.fixedShift) return;
+      for (let i = 0; i < days.length - 1; i++) {
+        const d = days[i].date, next = days[i + 1].date;
+        if (workCode(assignments[s.id][d]) === 'E'
+            && assignments[s.id][next] === '○'
+            && !isLocked(locked, s.id, next)) {
+          assignments[s.id][next] = '例';
+        }
+      }
+    });
+
+    // Step 2: national holiday ○ → 國
+    staff.forEach(s => {
+      if (s.fixedShift) return;
+      days.forEach(day => {
+        if ((day.isHoliday || day.rotationGroup === 'national')
+            && assignments[s.id][day.date] === '○'
+            && !isLocked(locked, s.id, day.date)) {
+          assignments[s.id][day.date] = '國';
+        }
+      });
+    });
+
+    // Step 3: weekly quota distribution
+    staff.forEach(s => {
+      if (s.fixedShift) return;
+      const state = buildWeeklyRestState(days, assignments, s.id);
+      state.weeks.forEach((week, wi) => {
+        const circles = week.filter(d =>
+          assignments[s.id][d.date] === '○' && !isLocked(locked, s.id, d.date)
+        );
+        let need休 = state.targets[wi]['休'] - state.counts[wi]['休'];
+        let need例 = state.targets[wi]['例'] - state.counts[wi]['例'];
+
+        circles.forEach(d => {
+          if (d.dow === 6 && need休 > 0) {
+            assignments[s.id][d.date] = '休'; need休--;
+          } else if (d.dow === 0 && need例 > 0) {
+            assignments[s.id][d.date] = '例'; need例--;
+          } else if (need休 > 0) {
+            assignments[s.id][d.date] = '休'; need休--;
+          } else if (need例 > 0) {
+            assignments[s.id][d.date] = '例'; need例--;
+          } else {
+            assignments[s.id][d.date] = '白';
+          }
+        });
+      });
+    });
+
+    // Safety: convert any remaining ○ → 白
+    staff.forEach(s => {
+      days.forEach(day => {
+        if (assignments[s.id] && assignments[s.id][day.date] === '○') {
+          assignments[s.id][day.date] = '白';
+        }
+      });
+    });
   }
 
   function runRepairPipeline(assignments, staff, days, constraints, diagnostics) {
