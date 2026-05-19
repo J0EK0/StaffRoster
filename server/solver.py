@@ -87,8 +87,9 @@ def _add_sequence_constraints(
 ):
     """N前置, N不接△, E/3接續 all in one pass.
 
-    Constraints FROM a locked holiday cell are skipped — the cell is
-    immutable so adding outgoing constraints would risk INFEASIBLE.
+    Skip a constraint only when BOTH adjacent cells are locked — that is a
+    genuinely unavoidable conflict in the rotation data.  When only one side
+    is locked the free cell can always be adjusted by the solver.
     """
     off_and_n = OFF_SET | {'N', '休N'}
 
@@ -97,17 +98,17 @@ def _add_sequence_constraints(
             is_locked = (s.id, day.date) in locked_holiday_cells
 
             # --- N前置: prev must be OFF or N ---
-            # This is a constraint ON the current N cell (incoming), not outgoing.
-            # We skip it only if the current cell is locked (can't be changed anyway).
+            # Skip only when the prev cell is ALSO locked (true conflict).
             for n_code in ('N', '休N'):
                 nv = x.get(_key(s.id, day.date, n_code))
                 if nv is None:
                     continue
                 if i == 0:
                     continue  # no prev context — JS validator skips this too
-                if is_locked:
-                    continue  # locked holiday N: accept any preceding cell
                 prev = days[i - 1]
+                prev_locked = (s.id, prev.date) in locked_holiday_cells
+                if is_locked and prev_locked:
+                    continue  # both locked — rotation conflict, nothing to do
                 prev_ok = [
                     x[_key(s.id, prev.date, c)]
                     for c in off_and_n
@@ -118,31 +119,35 @@ def _add_sequence_constraints(
                 else:
                     model.add(nv == 0)
 
-            # --- N不接△: FROM current day (skip if locked) ---
-            if i < len(days) - 1 and not is_locked:
+            # --- N不接△: skip only when next cell is also locked ---
+            if i < len(days) - 1:
                 nxt = days[i + 1]
-                tri = x.get(_key(s.id, nxt.date, '△'))
-                if tri is not None:
-                    for n_code in ('N', '休N'):
-                        nv = x.get(_key(s.id, day.date, n_code))
-                        if nv is not None:
-                            model.add(tri == 0).only_enforce_if(nv)
+                nxt_locked = (s.id, nxt.date) in locked_holiday_cells
+                if not (is_locked and nxt_locked):
+                    tri = x.get(_key(s.id, nxt.date, '△'))
+                    if tri is not None:
+                        for n_code in ('N', '休N'):
+                            nv = x.get(_key(s.id, day.date, n_code))
+                            if nv is not None:
+                                model.add(tri == 0).only_enforce_if(nv)
 
-            # --- E/3接續: FROM current day (skip if locked) ---
-            if i < len(days) - 1 and not is_locked:
+            # --- E/3接續: skip only when next cell is also locked ---
+            if i < len(days) - 1:
                 nxt = days[i + 1]
-                for base, checker in (('E', allowed_after_e), ('3', allowed_after_3)):
-                    src_codes = [base, '休E'] if base == 'E' else [base]
-                    for sc in src_codes:
-                        sv = x.get(_key(s.id, day.date, sc))
-                        if sv is None:
-                            continue
-                        for fc in ALL_CODES:
-                            if checker(fc):
+                nxt_locked = (s.id, nxt.date) in locked_holiday_cells
+                if not (is_locked and nxt_locked):
+                    for base, checker in (('E', allowed_after_e), ('3', allowed_after_3)):
+                        src_codes = [base, '休E'] if base == 'E' else [base]
+                        for sc in src_codes:
+                            sv = x.get(_key(s.id, day.date, sc))
+                            if sv is None:
                                 continue
-                            fv = x.get(_key(s.id, nxt.date, fc))
-                            if fv is not None:
-                                model.add(fv == 0).only_enforce_if(sv)
+                            for fc in ALL_CODES:
+                                if checker(fc):
+                                    continue
+                                fv = x.get(_key(s.id, nxt.date, fc))
+                                if fv is not None:
+                                    model.add(fv == 0).only_enforce_if(sv)
 
 
 def _add_max_consecutive(model: cp_model.CpModel, x: Xmap, staff, days):
