@@ -271,24 +271,15 @@ def get_weeks(day_list):
         weeks.append(cur)
     return weeks
 
-IS_WORK = lambda c: c not in ('休', '休N', '休E', '休*', '例', '國', '請', None)
-
 def check_weekly_quota(sid, day_list, asgn):
-    """Mirror solver's _add_weekly_quota exactly — including rotation-lock target reduction."""
+    """Mirror solver's _add_weekly_quota: count all Sat/Sun as needing 休/例 regardless of locks.
+    When Saturday is locked to work the solver places 休 on a weekday instead."""
     row = asgn.get(sid, {})
-    s_locks = rot_locks.get(sid, {})
     weeks = get_weeks(day_list)
     issues = []
     for i, week in enumerate(weeks):
         target_kyu = sum(1 for d in week if d["dow"] == 6)
         target_rei = sum(1 for d in week if d["dow"] == 0)
-        # Reduce targets for rotation-locked work shifts (mirrors solver fix)
-        for d in week:
-            locked_code = s_locks.get(d["date"])
-            if locked_code and d["dow"] == 6 and IS_WORK(locked_code):
-                target_kyu = max(0, target_kyu - 1)
-            elif locked_code and d["dow"] == 0 and IS_WORK(locked_code):
-                target_rei = max(0, target_rei - 1)
         kyu = 0; rei = 0
         for d in week:
             c = row.get(d["date"])
