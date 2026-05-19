@@ -20,6 +20,7 @@ const SHIFT_DEFS = [
   { code:'例', label:'例',     kind:'off'  },
   { code:'國', label:'國',     kind:'off'  },
   { code:'請', label:'請',     kind:'off'  },
+  { code:'○', label:'休假占位', kind:'off'  },
 ];
 
 const SHIFT_MAP = SHIFT_DEFS.reduce((m,s)=>{ m[s.code]=s; return m; }, {});
