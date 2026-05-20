@@ -47,7 +47,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=["test_july", "pytest", "requests", "tkinter", "matplotlib",
-              "numpy", "pandas", "scipy"],
+              "pandas", "scipy"],
     noarchive=False,
 )
 
