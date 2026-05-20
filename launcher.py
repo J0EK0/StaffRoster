@@ -55,11 +55,19 @@ def _open_browser(port: int) -> None:
 
 
 if __name__ == "__main__":
-    port = _find_free_port()
-    os.environ["STAFFROSTER_BASE_DIR"] = BASE_DIR
-    os.environ["STAFFROSTER_PORT"] = str(port)
+    try:
+        port = _find_free_port()
+        os.environ["STAFFROSTER_BASE_DIR"] = BASE_DIR
+        os.environ["STAFFROSTER_PORT"] = str(port)
 
-    threading.Thread(target=_open_browser, args=(port,), daemon=True).start()
+        threading.Thread(target=_open_browser, args=(port,), daemon=True).start()
 
-    import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=port, log_level="warning")
+        # Import app directly (more reliable than string ref in frozen env)
+        from main import app  # noqa: E402
+        import uvicorn
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        input("\n發生錯誤，請截圖上方訊息後按 Enter 關閉。")
