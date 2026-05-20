@@ -11,6 +11,10 @@ extra_hidden = (
     + collect_submodules("anyio")
     + collect_submodules("pydantic")
     + collect_submodules("pydantic_core")
+    + collect_submodules("google.protobuf")   # OR-Tools runtime dependency
+    + collect_submodules("absl")              # OR-Tools runtime dependency
+    + collect_submodules("pandas")            # OR-Tools runtime dependency
+    + collect_submodules("aiofiles")          # StaticFiles async I/O
     + [
         "uvicorn.protocols.http.h11_impl",
         "uvicorn.protocols.http.httptools_impl",
@@ -18,6 +22,7 @@ extra_hidden = (
         "uvicorn.loops.asyncio",
         "anyio._backends._asyncio",
         "anyio._backends._trio",
+        "immutabledict",                      # OR-Tools runtime dependency
     ]
 )
 
@@ -47,7 +52,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=["test_july", "pytest", "requests", "tkinter", "matplotlib",
-              "pandas", "scipy"],
+              "scipy"],
     noarchive=False,
 )
 
