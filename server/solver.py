@@ -287,21 +287,36 @@ def _add_forbidden(
                         model.add(v == 0)
 
 
-def _add_daily_limits(model: cp_model.CpModel, x: Xmap, staff, days):
-    """請假 ≤ 4/day and OFF ≤ 4/weekday."""
+def _add_daily_limits(
+    model: cp_model.CpModel, x: Xmap, rotation_staff, days,
+    all_staff=None, draft: Draft | None = None, constraints: dict | None = None,
+):
+    """請假 ≤ 4/day and OFF ≤ 4/weekday, counting fixed staff as constants."""
+    fixed_staff = [s for s in (all_staff or []) if is_fixed_staff(s)]
+
+    def _fixed_code(s, date: str) -> str | None:
+        c = (constraints or {}).get(s.id, {}).get(date)
+        return c if c is not None else (draft or {}).get(s.id, {}).get(date)
+
     for day in days:
-        leave = [x[_key(s.id, day.date, '請')] for s in staff if _key(s.id, day.date, '請') in x]
-        if leave:
-            model.add(sum(leave) <= MAX_DAILY_LEAVE)
+        fixed_leave = sum(1 for s in fixed_staff if _fixed_code(s, day.date) == '請')
+        leave = [x[_key(s.id, day.date, '請')] for s in rotation_staff if _key(s.id, day.date, '請') in x]
+        if leave or fixed_leave:
+            model.add(sum(leave) + fixed_leave <= MAX_DAILY_LEAVE)
+
         if not is_holiday_like(day):
+            fixed_off = sum(
+                1 for s in fixed_staff
+                if _fixed_code(s, day.date) in OFF_SET
+            )
             off_vars = [
                 x[_key(s.id, day.date, c)]
-                for s in staff
+                for s in rotation_staff
                 for c in OFF_SET
                 if _key(s.id, day.date, c) in x
             ]
-            if off_vars:
-                model.add(sum(off_vars) <= MAX_DAILY_LEAVE)
+            if off_vars or fixed_off:
+                model.add(sum(off_vars) + fixed_off <= MAX_DAILY_LEAVE)
 
 
 def _add_holiday_no_white(
@@ -560,7 +575,7 @@ def repair_schedule(req: RepairRequest) -> RepairResponse:
     _add_no_guo_rule(model, x, rotation_staff, days)
     _add_daily_coverage(model, x, rotation_staff, days)
     _add_forbidden(model, x, rotation_staff, days, locked_holiday_cells)
-    _add_daily_limits(model, x, rotation_staff, days)
+    _add_daily_limits(model, x, rotation_staff, days, staff, draft, constraints)
     _add_holiday_no_white(model, x, rotation_staff, days, locked_holiday_cells)
     _add_rest_star_sunday_only(model, x, rotation_staff, days, locked_holiday_cells)
     _add_user_constraints(model, x, constraints, locked_holiday_cells, day_dow)
