@@ -479,7 +479,14 @@ def _extract_solution(
         for day in days:
             if is_fixed_staff(s):
                 user_val = (constraints or {}).get(s.id, {}).get(day.date)
-                row[day.date] = user_val if user_val is not None else draft.get(s.id, {}).get(day.date)
+                code = user_val if user_val is not None else draft.get(s.id, {}).get(day.date)
+                # Mirror _add_user_constraints: Saturday 請→休, Sunday 請→例
+                if code == '請':
+                    if day.dow == 6:
+                        code = '休'
+                    elif day.dow == 0:
+                        code = '例'
+                row[day.date] = code
             else:
                 assigned: Optional[str] = None
                 for c in ALL_CODES:
