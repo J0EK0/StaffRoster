@@ -93,8 +93,18 @@ CP-SAT 修班引擎（Google OR-Tools）。
    - `_add_daily_coverage`：每日特殊班人數需求
    - `_add_forbidden_shift`：豁免 rotation-locked 格子
    - `_add_user_constraints`：使用者申請（請假/指定班）
+     - 週六 `請` → hard-lock 為 `休`（輪班員工）
+     - 週日 `請` → hard-lock 為 `例`（輪班員工）
+   - `_add_daily_limits`：每日 OFF 人數上限
+     - 請假人數 ≤ 4（所有天）
+     - 平日 OFF 總人數（休/例/國/請）≤ 4
+     - 固定班員工的 OFF 作為常數納入計算
 
 4. 最小化目標函式：偏離底稿的格子數 + 平日缺 N/E 懲罰
+
+5. 提取解（`_extract_solution`）：
+   - 固定班員工班別來自 constraints（優先）或 draft（fallback）
+   - 固定班週六 `請` → `休`、週日 `請` → `例`（與輪班員工對齊）
 
 ### `rules.py`
 
@@ -140,13 +150,32 @@ CP-SAT 修班引擎（Google OR-Tools）。
 `請` 的 CP-SAT 變數只在使用者有對應請假申請時才建立。
 Solver 不能自行在任意格子使用 `請` 作 OFF 碼填充。
 
+### 平日 OFF 人數上限（含固定班）
+
+`_add_daily_limits` 限制每個平日最多 4 人 OFF（休/例/國/請）。
+固定班員工沒有 CP-SAT 變數，其 OFF 碼以**常數**形式加入約束：
+
+```
+sum(輪班員工 OFF 變數) + 固定班 OFF 常數 ≤ MAX_DAILY_LEAVE
+```
+
+固定班員工若當天是 `請`、`休`、`例`、`國` 其中之一，即計入上限。
+
+### 固定班員工假日請假轉換
+
+固定班員工在週六/週日填寫 `請` 時，`_extract_solution` 自動轉換：
+- 週六 `請` → `休`
+- 週日 `請` → `例`
+
+與輪班員工的 `_add_user_constraints` 行為一致，確保週配額正確計算。
+
 ---
 
 ## 開發指令
 
 ```bash
-# 啟動後端
-cd server && uvicorn main:app --port 8000
+# 啟動後端（--reload 讓程式碼改動自動重載）
+cd server && uvicorn main:app --port 8000 --reload
 
 # 執行底稿驗證（JS）
 node js/verify.js
