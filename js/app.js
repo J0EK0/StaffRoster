@@ -1604,9 +1604,17 @@
   }
 
   // ===== 啟動 =====
-  // 暴露給 prefs-stage.js / ui-extras.js 等附加模組使用
+  // 暴露給 prefs-stage.js / ui-extras.js / shift-config-ui.js 等附加模組使用
   window.appState = state;
   window.appRender = render;
+
+  // shift-config-ui 儲存後呼叫，重新建立動態常數並重新 render
+  window.App = window.App || {};
+  window.App.reinit = () => {
+    ShiftConfigManager.init();
+    STAT_CODES = buildStatCodes();
+    render();
+  };
 
   document.addEventListener('DOMContentLoaded', init);
 

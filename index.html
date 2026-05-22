@@ -33,6 +33,7 @@
     <div class="more-menu">
       <button id="btn-more-menu" class="more-btn" type="button" title="更多">⋯</button>
       <div id="more-menu-pop" class="more-menu-pop hidden">
+        <button id="btn-shift-config">班別設定</button>
         <button id="btn-clear-schedule">清空排班內容</button>
         <button id="btn-reset-month">清空偏好與版面</button>
       </div>
@@ -88,6 +89,29 @@
     <div id="violations" class="violations"></div>
   </div>
 </aside>
+
+<!-- 班別設定 modal -->
+<div id="shift-config-modal" class="modal hidden">
+  <div class="modal-bg"></div>
+  <div class="modal-body shift-config-modal-body">
+    <div class="modal-header">
+      <span>班別設定</span>
+      <button class="modal-close" id="btn-shift-config-close">×</button>
+    </div>
+    <div class="sc-tabs" id="sc-tabs">
+      <button class="sc-tab-btn active" data-tab="shifts">班別列表</button>
+      <button class="sc-tab-btn" data-tab="daily-reqs">每日需求</button>
+      <button class="sc-tab-btn" data-tab="sequence">接班規則</button>
+      <button class="sc-tab-btn" data-tab="priority">派班優先</button>
+    </div>
+    <div class="modal-content sc-modal-content" id="sc-content"></div>
+    <div class="modal-footer">
+      <button id="btn-sc-reset" class="sc-reset-btn">重設為預設值</button>
+      <button id="btn-sc-save" class="primary">儲存</button>
+      <button id="btn-sc-cancel">取消</button>
+    </div>
+  </div>
+</div>
 
 <!-- 底稿 modal -->
 <div id="rotation-modal" class="modal hidden">
@@ -172,5 +196,6 @@
 <script src="js/tweaks.js?v=41"></script>
 <script src="js/ui-extras.js?v=41"></script>
 <script src="js/prefs-stage.js?v=41"></script>
+<script src="js/shift-config-ui.js?v=41"></script>
 </body>
 </html>
