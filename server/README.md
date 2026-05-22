@@ -1,4 +1,4 @@
-# CP-SAT 排班修復後端
+# CP-SAT 排班後端
 
 ## 安裝
 
@@ -7,28 +7,18 @@ cd server
 pip install -r requirements.txt
 ```
 
-## 啟動
+## 啟動（開發用）
 
 ```bash
 cd server
 uvicorn main:app --reload --port 8000
 ```
 
-## 使用方式
+啟動後開瀏覽器 `http://localhost:8000`，前端與 API 都由同一個 server 提供。
 
-啟動後，在瀏覽器開 `index.html`（建議用 `python -m http.server` 避免 CORS）：
+## 一般使用者
 
-```bash
-# 在 repo 根目錄
-python -m http.server 3000
-# 開瀏覽器 http://localhost:3000
-```
-
-流程：
-1. 點「② 產生底稿」— JS 執行（保持規律性）
-2. 點「③ 下一步修班」— 呼叫 CP-SAT server，回傳無違規排班
-
-若 server 未啟動，③ 會自動 fallback 到原本的 JS greedy repair。
+請從 GitHub Releases 下載 `StaffRoster-windows.zip`，不需要手動啟動 server。
 
 ## API
 
@@ -43,6 +33,7 @@ python -m http.server 3000
 ```
 
 回傳：
+
 ```json
 {
   "assignments": {...},
@@ -52,7 +43,11 @@ python -m http.server 3000
 }
 ```
 
-`status` 可能值：`OPTIMAL`（有最優保證）、`FEASIBLE`（有解但未證最優）、`INFEASIBLE`（約束衝突）、`TIMEOUT`（30 秒超時）
+`status` 可能值：
+- `OPTIMAL`：有最優保證
+- `FEASIBLE`：有解但未證最優
+- `INFEASIBLE`：約束衝突，無可行解
+- `TIMEOUT`：30 秒超時
 
 ## 效能說明
 
