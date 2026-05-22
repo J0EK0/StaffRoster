@@ -16,17 +16,9 @@ const Validator = (() => {
   function isRestOnly(code) {
     return isOff(code);
   }
-  function allowedAfterE(nextCode) {
-    if (!nextCode) return true;
-    if (isRestOnly(nextCode)) return true;
-    const nextWork = workCode(nextCode);
-    return nextWork === '7' || nextWork === 'E';
-  }
-  function allowedAfter3(nextCode) {
-    if (!nextCode) return true;
-    if (isRestOnly(nextCode)) return true;
-    const nextWork = workCode(nextCode);
-    return nextWork === '7' || nextWork === '3';
+  /** 通用接班規則：委託 ShiftConfigManager（涵蓋 E/3 及任何自訂規則） */
+  function allowedAfterShift(fromCode, nextCode) {
+    return ShiftConfigManager.isAllowedAfter(fromCode, nextCode);
   }
 
   // 取單人在某日的班別
@@ -75,26 +67,23 @@ const Validator = (() => {
     });
   }
 
-  // 規則 3: E/3 後只能 休/7/E (3 後可接 3)
+  // 規則 3: 接班限制（動態，從 ShiftConfigManager.sequenceRules 取得）
   function checkEvening3End(schedule, staff, errs) {
     const { days, assignments } = schedule;
+    const rules = ShiftConfigManager._config ? ShiftConfigManager._config.sequenceRules : {};
+    if (Object.keys(rules).length === 0) return;
     staff.forEach(s => {
       for (let i = 0; i < days.length - 1; i++) {
         const cur = getCode(assignments, s.id, days[i].date);
         const nxt = getCode(assignments, s.id, days[i+1].date);
-        if (!nxt) continue;
-        if (workCode(cur) === 'E' && !allowedAfterE(nxt)) {
+        if (!cur || !nxt) continue;
+        const wc = workCode(cur);
+        if (!rules[wc]) continue;
+        if (!allowedAfterShift(wc, nxt)) {
           errs.push({
-            type:'E-bad-next',
+            type:`${wc}-bad-next`,
             staffId:s.id, name:s.name, date:days[i].date,
-            msg:`${s.name} ${days[i].date} E 後排「${nxt}」（只能接 休/例/國/請/7/E）`
-          });
-        }
-        if (workCode(cur) === '3' && !allowedAfter3(nxt)) {
-          errs.push({
-            type:'3-bad-next',
-            staffId:s.id, name:s.name, date:days[i].date,
-            msg:`${s.name} ${days[i].date} 3 後排「${nxt}」（只能接 休/例/國/請/7/3）`
+            msg:`${s.name} ${days[i].date} ${wc} 後排「${nxt}」（不符接班規則）`
           });
         }
       }

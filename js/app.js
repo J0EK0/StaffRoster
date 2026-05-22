@@ -13,7 +13,14 @@
     rotation: null,         // { weekday: { staffId: { date: code } }, regular/national: { _order, staffId: { date: code } } }
     showRuleIssues: false,
   };
-  const STAT_CODES = ['N','E','3','7','1','2','中','△','A','◎','休*','休','例','國'];
+  // STAT_CODES 在 init() 後由 buildStatCodes() 動態產生
+  let STAT_CODES = ['N','E','3','7','1','2','中','△','A','◎','休*','休','例','國'];
+  function buildStatCodes() {
+    const fixedOff = ['休*', '休', '例', '國'];
+    const workStats = ShiftConfigManager.getWorkCodes()
+      .filter(c => c !== ShiftConfigManager.getFallbackCode());
+    return [...new Set([...workStats, ...fixedOff])];
+  }
   const FIXED_STAT_CODES = ['假日', '花花', 'OC'];
   const FIXED_STAT_TITLES = {
     '假日': '假日 / 國定假日有上班 (非休例國請) 的天數',
@@ -53,6 +60,8 @@
 
   // ===== 初始化 =====
   function init() {
+    ShiftConfigManager.init();   // 必須在所有 dayRequirements / workCodes 使用前初始化
+    STAT_CODES = buildStatCodes();
     state.staff = Staff.load();
     applyNameColumnWidth(loadNameColumnWidth());
 
@@ -149,6 +158,7 @@
             schedule: state.schedule,
             staff: state.staff,
             constraints: state.constraints,
+            shift_config: ShiftConfigManager.toApiPayload(),
           }),
         });
         if (!res.ok) throw new Error(`Server error: ${res.status}`);
@@ -1465,7 +1475,7 @@
     days.forEach(d => {
       const td = document.createElement('td');
       td.className = 'rot-req-cell';
-      const needed = isWeekdayDraft ? dayRequirements(d.dow, false) : (d.dow === 0 ? ['休*','N','E','1'] : ['中','E','N','1','2']);
+      const needed = dayRequirements(d.dow, isWeekdayDraft ? false : d.isHoliday);
       const count = {};
       let filled = 0;
       currentActiveStaff().forEach(s => {
@@ -1512,7 +1522,7 @@
       days.forEach((d, di) => {
         const td = reqCells[di];
         if (!td) return;
-        const needed = isWeekdayDraft ? dayRequirements(d.dow, false) : (d.dow === 0 ? ['休*','N','E','1'] : ['中','E','N','1','2']);
+        const needed = dayRequirements(d.dow, isWeekdayDraft ? false : d.isHoliday);
         const count = {};
         let filled = 0;
         currentActiveStaff().forEach(s => {

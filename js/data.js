@@ -135,6 +135,11 @@ const DAILY_REQS = {
 };
 
 function dayRequirements(dow, isHoliday) {
+  // 若 ShiftConfigManager 已初始化，從動態設定取（回傳 string[]）
+  if (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager._config) {
+    return ShiftConfigManager.getDayRequirementsCodes(dow, isHoliday);
+  }
+  // fallback：原 hardcode
   if (dow === 0) return DAILY_REQS.sunday;
   if (isHoliday) return DAILY_REQS.holiday;
   if (dow === 6) return DAILY_REQS.saturday;
