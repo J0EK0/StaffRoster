@@ -250,22 +250,34 @@ const ShiftConfigUI = (() => {
       container.appendChild(buildSequenceRuleBlock(fromCode, rule, rules));
     });
 
-    // 新增規則
-    const addBtn = el('button', 'sc-add-btn', '＋ 新增接班規則（選班別）');
+    // 新增規則：選單取代 prompt
+    const existing = new Set(Object.keys(rules));
+    const candidates = _working.shifts.filter(s => s.kind === 'work' && !existing.has(s.code));
+
+    const addRow = el('div', 'sc-seq-add-rule');
+    const ruleSel = el('select', 'sc-seq-rule-sel');
+    const blankOpt = el('option', '', candidates.length > 0 ? '— 選擇要設定規則的班別 —' : '（所有工作班均已設定）');
+    blankOpt.value = '';
+    ruleSel.appendChild(blankOpt);
+    candidates.forEach(s => {
+      const o = el('option', '', `${s.code}　${s.label}`);
+      o.value = s.code;
+      ruleSel.appendChild(o);
+    });
+    ruleSel.disabled = candidates.length === 0;
+
+    const addBtn = el('button', 'sc-add-btn', '＋ 新增此班的接班規則');
+    addBtn.disabled = candidates.length === 0;
     addBtn.addEventListener('click', () => {
-      // 選還沒有規則的 work codes
-      const existing = new Set(Object.keys(rules));
-      const candidates = _working.shifts.filter(s => s.kind === 'work' && !existing.has(s.code));
-      if (candidates.length === 0) { alert('所有工作班都已有規則了'); return; }
-      const code = prompt('輸入要設定接班規則的班別代碼（' + candidates.map(c=>c.code).join(', ') + '）：');
-      if (!code || !code.trim()) return;
-      const trimmed = code.trim();
-      if (!_working.shifts.find(s => s.code === trimmed)) { alert(`找不到班別「${trimmed}」`); return; }
-      if (rules[trimmed]) { alert(`「${trimmed}」已有規則`); return; }
-      rules[trimmed] = { allowedAfter: [] };
+      const code = ruleSel.value;
+      if (!code) return;
+      rules[code] = { allowedAfter: [] };
       renderTab('sequence');
     });
-    container.appendChild(addBtn);
+
+    addRow.appendChild(ruleSel);
+    addRow.appendChild(addBtn);
+    container.appendChild(addRow);
   }
 
   function buildSequenceRuleBlock(fromCode, rule, allRules) {
@@ -297,23 +309,31 @@ const ShiftConfigUI = (() => {
       tagsWrap.appendChild(tag);
     });
 
-    // 新增允許班別
-    const addWrap = el('span', 'sc-seq-add');
-    const wcInput = el('input', 'sc-seq-input');
-    wcInput.placeholder = '輸入班別代碼';
-    wcInput.maxLength = 3;
-    const addBtn = el('button', 'sc-tag-add', '新增');
-    addBtn.addEventListener('click', () => {
-      const code = wcInput.value.trim();
-      if (!code) return;
-      if (!rule.allowedAfter.includes(code)) {
-        rule.allowedAfter.push(code);
-      }
-      renderTab('sequence');
-    });
-    addWrap.appendChild(wcInput);
-    addWrap.appendChild(addBtn);
-    tagsWrap.appendChild(addWrap);
+    // 新增允許班別：選單（只列出還未加入的工作班）
+    const allowedSet = new Set(rule.allowedAfter || []);
+    const available = _working.shifts.filter(s => s.kind === 'work' && !allowedSet.has(s.code));
+    if (available.length > 0) {
+      const addWrap = el('span', 'sc-seq-add');
+      const wcSel = el('select', 'sc-seq-sel');
+      const blankOpt = el('option', '', '＋ 新增允許班別');
+      blankOpt.value = '';
+      wcSel.appendChild(blankOpt);
+      available.forEach(s => {
+        const o = el('option', '', `${s.code}　${s.label}`);
+        o.value = s.code;
+        wcSel.appendChild(o);
+      });
+      wcSel.addEventListener('change', () => {
+        const code = wcSel.value;
+        if (!code) return;
+        if (!rule.allowedAfter.includes(code)) {
+          rule.allowedAfter.push(code);
+        }
+        renderTab('sequence');
+      });
+      addWrap.appendChild(wcSel);
+      tagsWrap.appendChild(addWrap);
+    }
     block.appendChild(tagsWrap);
 
     const hint = el('p', 'sc-seq-hint', '※ 休假班永遠允許，不需列出。空白名單 = 無限制。');
