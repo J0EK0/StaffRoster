@@ -239,3 +239,168 @@ def allowed_after_3(next_code: Optional[str]) -> bool:
     if is_off(next_code):
         return True
     return effective_work_code(next_code) in ('7', '3')
+
+
+# ---------------------------------------------------------------------------
+# RuntimeRules — 動態班別規則（由 build_runtime_rules 產生，傳入 solver）
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RuntimeRules:
+    """
+    所有 solver 需要的班別規則，集中在一個物件。
+    由 build_runtime_rules() 從 ShiftConfig 或內建預設值建立。
+    """
+    all_codes: list[str]
+    work_codes: list[str]
+    off_codes: list[str]
+    off_set: set[str]
+    # code → ShiftDef（或相容的 duck-type 物件）
+    shift_map: dict
+    # 每日需求（list[str]，每個 code 出現幾次 = 需要幾人）
+    daily_reqs: dict[str, list[str]]
+    # 每日需求的計數版本（供 solver 用 sum==count 約束）
+    daily_reqs_count: dict[str, dict[str, int]] = field(default_factory=dict)
+    # 接班規則：{fromCode: [allowed_work_code, ...]}（空 list = 無限制）
+    sequence_rules: dict[str, list[str]] = field(default_factory=dict)
+    # 兜底班代碼（平日輪班人員無特殊需求時填入）
+    fallback_code: str = '白'
+    # 圈圈班代碼集合（對應 circle=True 的班別）
+    circle_codes: set[str] = field(default_factory=set)
+
+    # --- 查詢方法 ---
+
+    def day_requirements(self, dow: int, is_holiday: bool) -> list[str]:
+        """返回該日型的需求班別列表（含重複，重複次數 = 需要人數）。"""
+        if dow == 0:
+            return self.daily_reqs.get('sunday', [])
+        if is_holiday:
+            return self.daily_reqs.get('holiday', [])
+        if dow == 6:
+            return self.daily_reqs.get('saturday', [])
+        return self.daily_reqs.get('weekday', [])
+
+    def day_requirements_count(self, dow: int, is_holiday: bool) -> dict[str, int]:
+        """返回 {code: count} 格式的每日需求。"""
+        if dow == 0:
+            return self.daily_reqs_count.get('sunday', {})
+        if is_holiday:
+            return self.daily_reqs_count.get('holiday', {})
+        if dow == 6:
+            return self.daily_reqs_count.get('saturday', {})
+        return self.daily_reqs_count.get('weekday', {})
+
+    def effective_work_code(self, code: Optional[str]) -> Optional[str]:
+        if code is None:
+            return None
+        d = self.shift_map.get(code)
+        if d is None:
+            return code
+        wc = getattr(d, 'work_code', None) or getattr(d, 'workCode', None)
+        return wc if wc else code
+
+    def rest_quota_code(self, code: Optional[str]) -> Optional[str]:
+        if code is None:
+            return None
+        d = self.shift_map.get(code)
+        if d:
+            rq = getattr(d, 'rest_quota', None) or getattr(d, 'restQuota', None)
+            if rq:
+                return rq
+        # 特殊規則：休* 永遠算 休
+        if code == '休*':
+            return '休'
+        return code
+
+    def is_off(self, code: Optional[str]) -> bool:
+        return bool(code and code in self.off_set)
+
+    def is_work(self, code: Optional[str]) -> bool:
+        return bool(code and code not in self.off_set)
+
+    def is_circle(self, code: Optional[str]) -> bool:
+        return bool(code and code in self.circle_codes)
+
+    def allowed_after(self, from_code: str, next_code: Optional[str]) -> bool:
+        """
+        判斷上了 from_code 班之後，隔天排 next_code 是否合法。
+        off codes 永遠允許；work codes 若白名單為空則也允許。
+        """
+        if not next_code or next_code in self.off_set:
+            return True
+        allowed = self.sequence_rules.get(from_code)
+        if allowed is None:
+            return True   # 沒有規則 = 無限制
+        next_work = self.effective_work_code(next_code)
+        return next_work in allowed
+
+
+def build_runtime_rules(cfg: Optional['ShiftConfig'] = None) -> RuntimeRules:
+    """
+    從 API 傳入的 ShiftConfig 建立 RuntimeRules。
+    cfg 為 None 時使用 rules.py 的內建預設值（向下相容）。
+
+    ShiftConfig 型別定義在 models.py，這裡用字串型別標注避免循環 import。
+    """
+    if cfg is None:
+        # 使用 hardcode 預設值
+        daily_reqs_count = {
+            k: {c: v.count(c) for c in set(v)}
+            for k, v in DAILY_REQS.items()
+        }
+        return RuntimeRules(
+            all_codes=ALL_CODES,
+            work_codes=WORK_CODES,
+            off_codes=OFF_CODES,
+            off_set=OFF_SET,
+            shift_map=SHIFT_MAP,
+            daily_reqs={k: list(v) for k, v in DAILY_REQS.items()},
+            daily_reqs_count=daily_reqs_count,
+            sequence_rules={
+                'E': ['7', 'E'],
+                '3': ['7', '3'],
+            },
+            fallback_code='白',
+            circle_codes={'◎'},
+        )
+
+    # 從 ShiftConfig 建立
+    shifts = cfg.shifts
+    all_codes  = [s.code for s in shifts]
+    work_codes = [s.code for s in shifts if s.kind == 'work']
+    off_codes  = [s.code for s in shifts if s.kind == 'off']
+    off_set    = set(off_codes)
+    shift_map  = {s.code: s for s in shifts}
+    circle_codes = {s.code for s in shifts if s.circle}
+    fallback = next((s.code for s in shifts if s.isFallback), '白')
+
+    # dailyReqs: {key: list[str]}（count > 1 的班別在 list 裡出現多次）
+    daily_reqs: dict[str, list[str]] = {}
+    daily_reqs_count: dict[str, dict[str, int]] = {}
+    for day_type, entries in cfg.dailyReqs.items():
+        codes_expanded = []
+        count_map: dict[str, int] = {}
+        for e in entries:
+            codes_expanded.extend([e.code] * e.count)
+            count_map[e.code] = e.count
+        daily_reqs[day_type] = codes_expanded
+        daily_reqs_count[day_type] = count_map
+
+    # sequenceRules: {code: list[str]}
+    sequence_rules: dict[str, list[str]] = {
+        code: rule.allowedAfter
+        for code, rule in cfg.sequenceRules.items()
+    }
+
+    return RuntimeRules(
+        all_codes=all_codes,
+        work_codes=work_codes,
+        off_codes=off_codes,
+        off_set=off_set,
+        shift_map=shift_map,
+        daily_reqs=daily_reqs,
+        daily_reqs_count=daily_reqs_count,
+        sequence_rules=sequence_rules,
+        fallback_code=fallback,
+        circle_codes=circle_codes,
+    )
