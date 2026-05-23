@@ -2,20 +2,12 @@
 // schedule = { year, month, days:[{date,dow,isHoliday}], assignments:{ staffId: { 'YYYY-MM-DD': code } } }
 
 const Validator = (() => {
-  const OFF_SET = new Set(OFF_CODES);
-
-  function isOff(code) {
-    return code && OFF_SET.has(code);
-  }
-  function isWork(code) {
-    return code && !OFF_SET.has(code);
-  }
-  function workCode(code) {
-    return effectiveWorkCode(code);
-  }
-  function isRestOnly(code) {
-    return isOff(code);
-  }
+  // OFF_SET / workCode 改從 ShiftConfigManager 動態取，支援自訂班別
+  function getOffSet() { return ShiftConfigManager.getOffSet(); }
+  function isOff(code) { return code && getOffSet().has(code); }
+  function isWork(code) { return code && !getOffSet().has(code); }
+  function workCode(code) { return ShiftConfigManager.effectiveWorkCode(code); }
+  function isRestOnly(code) { return isOff(code); }
   /** 通用接班規則：委託 ShiftConfigManager（涵蓋 E/3 及任何自訂規則） */
   function allowedAfterShift(fromCode, nextCode) {
     return ShiftConfigManager.isAllowedAfter(fromCode, nextCode);
@@ -238,7 +230,7 @@ const Validator = (() => {
       let n = 0;
       staff.forEach(s => {
         const c = getCode(assignments, s.id, d.date);
-        if (OFF_SET.has(c)) n++;
+        if (getOffSet().has(c)) n++;
       });
       if (n > MAX_DAILY_LEAVE) {
         errs.push({
@@ -258,11 +250,11 @@ const Validator = (() => {
       if (!isHolidayLike) return;
       staff.forEach(s => {
         if (s.fixedShift) return; // 固定班員工豁免
-        if (getCode(assignments, s.id, d.date) === '白') {
+        if (getCode(assignments, s.id, d.date) === ShiftConfigManager.getFallbackCode()) {
           errs.push({
             type:'holiday-white',
             staffId:s.id, name:s.name, date:d.date,
-            msg:`${s.name} ${d.date} 假日不可排白班 (應為 休/例/國)`
+            msg:`${s.name} ${d.date} 假日不可排${ShiftConfigManager.getFallbackCode()}班 (應為 休/例/國)`
           });
         }
       });
@@ -294,11 +286,23 @@ const Validator = (() => {
     });
   }
 
-  // 規則 7: 每日特殊班別名額需剛好 1 人
+  // 規則 7: 每日特殊班別名額需符合設定人數
   function checkDailyCoverage(schedule, staff, errs) {
     const { days, assignments } = schedule;
     days.forEach(d => {
-      const reqs = dayRequirements(d.dow, d.isHoliday);
+      // 使用 ShiftConfigManager.getDayRequirements 取得 [{code, count}]，支援 count > 1
+      const rawReqs = (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager._config)
+        ? ShiftConfigManager.getDayRequirements(d.dow, d.isHoliday)
+        : dayRequirements(d.dow, d.isHoliday).map(code => ({ code, count: 1 }));
+
+      // 依 code 彙整（同一 code 多個 entry 合併 count）
+      const reqMap = {};
+      rawReqs.forEach(r => {
+        const c = typeof r === 'string' ? r : r.code;
+        const cnt = typeof r === 'string' ? 1 : (r.count || 1);
+        reqMap[c] = (reqMap[c] || 0) + cnt;
+      });
+
       const count = {};
       const holders = {};
       staff.forEach(s => {
@@ -309,22 +313,23 @@ const Validator = (() => {
         if (!holders[key]) holders[key] = [];
         holders[key].push(s);
       });
-      reqs.forEach(req => {
+
+      Object.entries(reqMap).forEach(([req, requiredCount]) => {
         const n = count[req] || 0;
-        if (n < 1) {
+        if (n < requiredCount) {
           errs.push({
             type:'short-coverage',
             staffId:null, name:null, date:d.date,
-            msg:`${d.date} (${DOW_LABEL[d.dow]}${d.isHoliday?'/國':''}) 缺班別「${req}」`
+            msg:`${d.date} (${DOW_LABEL[d.dow]}${d.isHoliday?'/國':''}) 缺班別「${req}」（需 ${requiredCount} 人，現有 ${n} 人）`
           });
-        } else if (n > 1) {
+        } else if (n > requiredCount) {
           const people = holders[req] || [];
           errs.push({
             type:'duplicate-coverage',
             staffId:null, name:null, date:d.date,
             staffIds:people.map(s => s.id),
             names:people.map(s => s.name),
-            msg:`${d.date} (${DOW_LABEL[d.dow]}${d.isHoliday?'/國':''}) 班別「${req}」${n} 人，限 1 人：${people.map(s => s.name).join('、')}`
+            msg:`${d.date} (${DOW_LABEL[d.dow]}${d.isHoliday?'/國':''}) 班別「${req}」${n} 人，需 ${requiredCount} 人：${people.map(s => s.name).join('、')}`
           });
         }
       });

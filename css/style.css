@@ -1823,8 +1823,11 @@ body.resizing-name-col * {
 .sc-tag-rm:hover { color: var(--danger, #c00); }
 .sc-seq-add { display: inline-flex; gap: 4px; align-items: center; }
 .sc-seq-input { width: 80px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; }
+.sc-seq-sel { padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; cursor: pointer; }
 .sc-tag-add { padding: 3px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; background: transparent; }
 .sc-seq-hint { font-size: 12px; color: var(--text-faint); margin: 4px 0 0; }
+.sc-seq-add-rule { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.sc-seq-rule-sel { padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; cursor: pointer; min-width: 200px; }
 
 /* 派班優先 */
 .sc-priority-list { list-style: decimal inside; padding: 0; margin: 0; }
