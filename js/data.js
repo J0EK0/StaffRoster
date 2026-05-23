@@ -27,11 +27,19 @@ const WORK_CODES = SHIFT_DEFS.filter(s=>s.kind==='work').map(s=>s.code);
 const OFF_CODES  = SHIFT_DEFS.filter(s=>s.kind==='off').map(s=>s.code);
 
 function isRestWorkCode(code) {
+  if (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager._config) {
+    const def = ShiftConfigManager.getShiftMap()[code];
+    return Boolean(def && def.restQuota && def.workCode);
+  }
   const def = SHIFT_MAP[code];
   return Boolean(def && def.restQuota && def.workCode);
 }
 
 function effectiveWorkCode(code) {
+  // 優先從 ShiftConfigManager 動態取（支援自訂複合班）
+  if (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager._config) {
+    return ShiftConfigManager.effectiveWorkCode(code);
+  }
   const def = SHIFT_MAP[code];
   return (def && def.workCode) || code;
 }
@@ -117,6 +125,12 @@ function normalizeCircleBalance(staffId, staffMember, assignments, constraints, 
 }
 
 function restQuotaCode(code) {
+  // 優先從 ShiftConfigManager 動態取（支援自訂複合班）
+  if (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager._config) {
+    const def = ShiftConfigManager.getShiftMap()[code];
+    if (def && def.restQuota) return def.restQuota;
+    return code === '休*' ? '休' : code;
+  }
   const def = SHIFT_MAP[code];
   if (def && def.restQuota) return def.restQuota;
   return code === '休*' ? '休' : code;
@@ -135,6 +149,11 @@ const DAILY_REQS = {
 };
 
 function dayRequirements(dow, isHoliday) {
+  // 若 ShiftConfigManager 已初始化，從動態設定取（回傳 string[]）
+  if (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager._config) {
+    return ShiftConfigManager.getDayRequirementsCodes(dow, isHoliday);
+  }
+  // fallback：原 hardcode
   if (dow === 0) return DAILY_REQS.sunday;
   if (isHoliday) return DAILY_REQS.holiday;
   if (dow === 6) return DAILY_REQS.saturday;

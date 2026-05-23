@@ -5,27 +5,20 @@ const Scheduler = (() => {
 
   const OFF = new Set(OFF_CODES);
   const REST_TOKENS = new Set(['休','休*','例','國']);
-  const SPECIAL_WORK_CODES = new Set(['N','E','3','7','1','2','中','△','A']);
   const isOff = c => c && OFF.has(c);
   const isWork = c => c && !OFF.has(c);
   const isRestToken = c => REST_TOKENS.has(c);
   const isRestWork = c => isRestWorkCode(c);
-  const workCode = c => effectiveWorkCode(c);
-  const coverageCode = c => SPECIAL_WORK_CODES.has(workCode(c)) ? workCode(c) : c;
-  const isSpecialWorkCode = c => SPECIAL_WORK_CODES.has(workCode(c));
+  const workCode = c => ShiftConfigManager.effectiveWorkCode(c);
 
-  function isAllowedAfterE(nextCode) {
-    if (!nextCode) return true;
-    if (isOff(nextCode)) return true;
-    const nextWork = workCode(nextCode);
-    return nextWork === '7' || nextWork === 'E';
-  }
+  // SPECIAL_WORK_CODES 改從 ShiftConfigManager 動態取（每次呼叫時更新）
+  function getSpecialWorkCodesSet() { return ShiftConfigManager.getSpecialWorkCodes(); }
+  const coverageCode = c => getSpecialWorkCodesSet().has(workCode(c)) ? workCode(c) : c;
+  const isSpecialWorkCode = c => getSpecialWorkCodesSet().has(workCode(c));
 
-  function isAllowedAfter3(nextCode) {
-    if (!nextCode) return true;
-    if (isOff(nextCode)) return true;
-    const nextWork = workCode(nextCode);
-    return nextWork === '7' || nextWork === '3';
+  /** 通用接班規則查詢：取代 isAllowedAfterE / isAllowedAfter3 */
+  function isAllowedAfterShift(fromCode, nextCode) {
+    return ShiftConfigManager.isAllowedAfter(fromCode, nextCode);
   }
 
   function canCountAsRequired(code, reqCode) {
@@ -337,14 +330,11 @@ const Scheduler = (() => {
       if (workCode(prev) === 'E' && !['7','E'].includes(workCode(code))) return false;
       if (workCode(prev) === '3' && !['7','3'].includes(workCode(code))) return false;
     }
-    // 今天 E/3，隔日已派的非白名單
-    if (workCode(code) === 'E' && dayIdx < days.length - 1) {
+    // 今天有接班規則的班，隔日已派的非白名單
+    if (dayIdx < days.length - 1) {
+      const wc = workCode(code);
       const nxt = assignments[s.id][days[dayIdx+1].date];
-      if (!isAllowedAfterE(nxt)) return false;
-    }
-    if (workCode(code) === '3' && dayIdx < days.length - 1) {
-      const nxt = assignments[s.id][days[dayIdx+1].date];
-      if (!isAllowedAfter3(nxt)) return false;
+      if (!isAllowedAfterShift(wc, nxt)) return false;
     }
 
     // 隔日已 N，今日非 N 工作班 → 違反 N 前置（這條保留為絕對硬，避免後續修不回來）
@@ -444,9 +434,8 @@ const Scheduler = (() => {
     fillHolidayDefaults(assignments, staff, days);
     const monthlyCount = buildMonthlyCount(assignments, staff, days);
 
-    const PRIORITY = ['N','E','△','3','7','A','中','1','2'];
-
-    days.forEach((d, dayIdx) => {
+        days.forEach((d, dayIdx) => {
+      const PRIORITY = ShiftConfigManager.getDraftPriority();
       const reqs = dayRequirements(d.dow, d.isHoliday).slice();
       reqs.sort((a,b) => {
         const ai = PRIORITY.indexOf(a);
@@ -478,8 +467,9 @@ const Scheduler = (() => {
         staff.forEach(s => {
           if (s.fixedShift) return;
           if (assignments[s.id][d.date] === null) {
-            assignments[s.id][d.date] = '白';
-            monthlyCount[s.id]['白'] = (monthlyCount[s.id]['白']||0) + 1;
+            const fb = ShiftConfigManager.getFallbackCode();
+            assignments[s.id][d.date] = fb;
+            monthlyCount[s.id][fb] = (monthlyCount[s.id][fb]||0) + 1;
           }
         });
       }
@@ -515,7 +505,7 @@ const Scheduler = (() => {
 
   function isPresetBlankForDay(code, day) {
     if (code === null || code === undefined) return true;
-    if (isWeekday(day)) return code === '白';
+    if (isWeekday(day)) return code === ShiftConfigManager.getFallbackCode();
     return isOff(code);
   }
 
@@ -535,8 +525,7 @@ const Scheduler = (() => {
         const prevCode = assignments[s.id][prevDate];
         const prevWc = prevCode ? workCode(prevCode) : null;
         if (wc === 'N' && prevCode !== null && !isOff(prevCode) && prevWc !== 'N') continue;
-        if (prevWc === 'E' && code && !isAllowedAfterE(code)) continue;
-        if (prevWc === '3' && code && !isAllowedAfter3(code)) continue;
+        if (prevWc && code && !isAllowedAfterShift(prevWc, code)) continue;
       }
       return s;
     }
@@ -604,7 +593,7 @@ const Scheduler = (() => {
       if (isWeekday(day)) {
         staff.forEach(s => {
           if (s.fixedShift) return;
-          if (assignments[s.id][day.date] === null) assignments[s.id][day.date] = '白';
+          if (assignments[s.id][day.date] === null) assignments[s.id][day.date] = ShiftConfigManager.getFallbackCode();
         });
 
         const weekdayData = rotation && rotation.weekday;
@@ -654,8 +643,7 @@ const Scheduler = (() => {
                 const prevCode = assignments[s.id][prevDay.date];
                 const prevWc = prevCode ? workCode(prevCode) : null;
                 if (wc === 'N' && prevCode !== null && !isOff(prevCode) && prevWc !== 'N') return;
-                if (prevWc === 'E' && !isAllowedAfterE(code)) return;
-                if (prevWc === '3' && !isAllowedAfter3(code)) return;
+                if (prevWc && !isAllowedAfterShift(prevWc, code)) return;
               }
             }
             assignments[s.id][day.date] = code;

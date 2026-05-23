@@ -15,13 +15,11 @@ from ortools.sat.python import cp_model
 
 from models import RepairRequest, RepairResponse
 from rules import (
-    ALL_CODES, OFF_SET, WORK_CODES,
     MAX_DAILY_LEAVE,
-    is_work, is_off, effective_work_code, rest_quota_code,
-    is_circle_shift, is_circle_staff, is_circle_day,
+    is_circle_staff, is_circle_day,
     is_holiday_like, is_true_weekday, is_fixed_staff, is_rotation_staff,
-    day_requirements, allowed_after_e, allowed_after_3,
     compute_weekly_targets,
+    build_runtime_rules, RuntimeRules,
 )
 
 Draft = dict[str, dict[str, Optional[str]]]  # staffId -> date -> code
@@ -32,9 +30,11 @@ def _key(staff_id: str, date: str, code: str) -> tuple:
     return (staff_id, date, code)
 
 
-def _allowed_codes_for(s) -> list[str]:
-    """Codes to create variables for a rotation staff member."""
-    return [c for c in ALL_CODES if c != '◎']
+def _allowed_codes_for(s, rr: RuntimeRules) -> list[str]:
+    """Codes to create variables for a rotation staff member.
+    Circle-only codes (◎ etc.) are excluded — they're handled separately for fixed staff.
+    """
+    return [c for c in rr.all_codes if not rr.is_circle(c)]
 
 
 # ---------------------------------------------------------------------------
@@ -84,31 +84,33 @@ def _find_rotation_holiday_locks(
 def _add_sequence_constraints(
     model: cp_model.CpModel, x: Xmap, staff, days,
     locked_holiday_cells: set[tuple],
+    rr: RuntimeRules,
 ):
-    """N前置, N不接△, E/3接續 all in one pass.
+    """接班限制：N前置、N不接△（內建），以及 rr.sequence_rules 裡的自訂 allowedAfter 規則。
 
     Skip a constraint only when BOTH adjacent cells are locked — that is a
     genuinely unavoidable conflict in the rotation data.  When only one side
     is locked the free cell can always be adjusted by the solver.
     """
-    off_and_n = OFF_SET | {'N', '休N'}
+    # N前置/N不接△ 適用於所有 effective_work_code == 'N' 的班別
+    n_codes = [c for c in rr.all_codes if rr.effective_work_code(c) == 'N']
+    off_and_n = rr.off_set | set(n_codes)
 
     for s in staff:
         for i, day in enumerate(days):
             is_locked = (s.id, day.date) in locked_holiday_cells
 
             # --- N前置: prev must be OFF or N ---
-            # Skip only when the prev cell is ALSO locked (true conflict).
-            for n_code in ('N', '休N'):
+            for n_code in n_codes:
                 nv = x.get(_key(s.id, day.date, n_code))
                 if nv is None:
                     continue
                 if i == 0:
-                    continue  # no prev context — JS validator skips this too
+                    continue  # no prev context
                 prev = days[i - 1]
                 prev_locked = (s.id, prev.date) in locked_holiday_cells
                 if is_locked and prev_locked:
-                    continue  # both locked — rotation conflict, nothing to do
+                    continue
                 prev_ok = [
                     x[_key(s.id, prev.date, c)]
                     for c in off_and_n
@@ -119,38 +121,45 @@ def _add_sequence_constraints(
                 else:
                     model.add(nv == 0)
 
-            # --- N不接△: skip only when next cell is also locked ---
+            # --- N不接△ ---
             if i < len(days) - 1:
                 nxt = days[i + 1]
                 nxt_locked = (s.id, nxt.date) in locked_holiday_cells
                 if not (is_locked and nxt_locked):
                     tri = x.get(_key(s.id, nxt.date, '△'))
                     if tri is not None:
-                        for n_code in ('N', '休N'):
+                        for n_code in n_codes:
                             nv = x.get(_key(s.id, day.date, n_code))
                             if nv is not None:
                                 model.add(tri == 0).only_enforce_if(nv)
 
-            # --- E/3接續: skip only when next cell is also locked ---
+            # --- 自訂 allowedAfter 規則（涵蓋內建 E/3 及使用者新增的任何規則）---
             if i < len(days) - 1:
                 nxt = days[i + 1]
                 nxt_locked = (s.id, nxt.date) in locked_holiday_cells
                 if not (is_locked and nxt_locked):
-                    for base, checker in (('E', allowed_after_e), ('3', allowed_after_3)):
-                        src_codes = [base, '休E'] if base == 'E' else [base]
+                    for from_code, allowed_list in rr.sequence_rules.items():
+                        if not allowed_list:
+                            continue  # 空白名單 = 無限制
+                        # 找所有 effective_work_code == from_code 的來源班別
+                        src_codes = [
+                            c for c in rr.all_codes
+                            if rr.effective_work_code(c) == from_code
+                        ]
                         for sc in src_codes:
                             sv = x.get(_key(s.id, day.date, sc))
                             if sv is None:
                                 continue
-                            for fc in ALL_CODES:
-                                if checker(fc):
+                            # 對所有不在白名單的 work code 加禁止約束
+                            for fc in rr.all_codes:
+                                if rr.allowed_after(from_code, fc):
                                     continue
                                 fv = x.get(_key(s.id, nxt.date, fc))
                                 if fv is not None:
                                     model.add(fv == 0).only_enforce_if(sv)
 
 
-def _add_max_consecutive(model: cp_model.CpModel, x: Xmap, staff, days):
+def _add_max_consecutive(model: cp_model.CpModel, x: Xmap, staff, days, rr: RuntimeRules):
     """Rotation staff ≤ 6 consecutive work days (sliding window of 7)."""
     for s in staff:
         if is_fixed_staff(s):
@@ -160,7 +169,7 @@ def _add_max_consecutive(model: cp_model.CpModel, x: Xmap, staff, days):
             work_vars = [
                 x[_key(s.id, d.date, c)]
                 for d in window
-                for c in WORK_CODES
+                for c in rr.work_codes
                 if _key(s.id, d.date, c) in x
             ]
             if work_vars:
@@ -170,6 +179,7 @@ def _add_max_consecutive(model: cp_model.CpModel, x: Xmap, staff, days):
 def _add_weekly_quota(
     model: cp_model.CpModel, x: Xmap, staff, days, draft: Draft,
     rotation_holiday_locks: dict[str, dict[str, str]],
+    rr: RuntimeRules,
 ):
     """Weekly 休/例 quota per rotation staff member.
 
@@ -190,13 +200,13 @@ def _add_weekly_quota(
             kyu_vars = []
             seen: set = set()
             for d in wt.days:
-                for c in ALL_CODES:
+                for c in rr.all_codes:
                     k = _key(s.id, d.date, c)
                     v = x.get(k)
                     if v is None or k in seen:
                         continue
-                    rq = rest_quota_code(c)
-                    if rq == '休':                          # 休, 休N, 休E, 休*
+                    rq = rr.rest_quota_code(c)
+                    if rq == '休':                          # 休, 休N, 休E, 休*, 及自訂複合班
                         kyu_vars.append(v); seen.add(k)
                     elif c == '國' and d.dow == 6:          # 國 on Saturday
                         kyu_vars.append(v); seen.add(k)
@@ -233,7 +243,7 @@ def _add_monthly_guo_quota(model: cp_model.CpModel, x: Xmap, staff, days):
             model.add(sum(guo_vars) == n_holidays)
 
 
-def _add_no_guo_rule(model: cp_model.CpModel, x: Xmap, staff, days):
+def _add_no_guo_rule(model: cp_model.CpModel, x: Xmap, staff, days, rr: RuntimeRules):
     """If the month has holidays, working staff must have ≥1 國 (rotation only)."""
     if not any(d.isHoliday for d in days):
         return
@@ -241,7 +251,7 @@ def _add_no_guo_rule(model: cp_model.CpModel, x: Xmap, staff, days):
         if is_fixed_staff(s):
             continue
         guo_vars = [x[_key(s.id, d.date, '國')] for d in days if _key(s.id, d.date, '國') in x]
-        work_vars = [x[_key(s.id, d.date, c)] for d in days for c in WORK_CODES if _key(s.id, d.date, c) in x]
+        work_vars = [x[_key(s.id, d.date, c)] for d in days for c in rr.work_codes if _key(s.id, d.date, c) in x]
         if not guo_vars or not work_vars:
             continue
         has_work = model.new_bool_var(f'hw_{s.id}')
@@ -250,23 +260,28 @@ def _add_no_guo_rule(model: cp_model.CpModel, x: Xmap, staff, days):
         model.add(sum(guo_vars) >= 1).only_enforce_if(has_work)
 
 
-def _add_daily_coverage(model: cp_model.CpModel, x: Xmap, staff, days):
-    """Each required shift per day must have exactly 1 person covering it."""
+def _add_daily_coverage(model: cp_model.CpModel, x: Xmap, staff, days, rr: RuntimeRules):
+    """Each required shift per day must be covered by exactly N people (N from config)."""
     for day in days:
-        for req in day_requirements(day.dow, day.isHoliday):
+        req_count = rr.day_requirements_count(day.dow, day.isHoliday)
+        for req_code, count in req_count.items():
             covering = [
                 x[_key(s.id, day.date, c)]
                 for s in staff
-                for c in ALL_CODES
-                if effective_work_code(c) == req and _key(s.id, day.date, c) in x
+                for c in rr.all_codes
+                if rr.effective_work_code(c) == req_code and _key(s.id, day.date, c) in x
             ]
             if covering:
-                model.add_exactly_one(covering)
+                if count == 1:
+                    model.add_exactly_one(covering)
+                else:
+                    model.add(sum(covering) == count)
 
 
 def _add_forbidden(
     model: cp_model.CpModel, x: Xmap, staff, days,
     locked_holiday_cells: set[tuple],
+    rr: RuntimeRules,
 ):
     """Staff cannot be assigned their forbidden codes.
 
@@ -280,8 +295,8 @@ def _add_forbidden(
         for day in days:
             if (s.id, day.date) in locked_holiday_cells:
                 continue
-            for c in ALL_CODES:
-                if c in fset or effective_work_code(c) in fset:
+            for c in rr.all_codes:
+                if c in fset or rr.effective_work_code(c) in fset:
                     v = x.get(_key(s.id, day.date, c))
                     if v is not None:
                         model.add(v == 0)
@@ -290,9 +305,11 @@ def _add_forbidden(
 def _add_daily_limits(
     model: cp_model.CpModel, x: Xmap, rotation_staff, days,
     all_staff=None, draft: Draft | None = None, constraints: dict | None = None,
+    rr: RuntimeRules | None = None,
 ):
     """請假 ≤ 4/day and OFF ≤ 4/weekday, counting fixed staff as constants."""
     fixed_staff = [s for s in (all_staff or []) if is_fixed_staff(s)]
+    off_set = rr.off_set if rr else set()
 
     def _fixed_code(s, date: str) -> str | None:
         c = (constraints or {}).get(s.id, {}).get(date)
@@ -307,12 +324,12 @@ def _add_daily_limits(
         if not is_holiday_like(day):
             fixed_off = sum(
                 1 for s in fixed_staff
-                if _fixed_code(s, day.date) in OFF_SET
+                if _fixed_code(s, day.date) in off_set
             )
             off_vars = [
                 x[_key(s.id, day.date, c)]
                 for s in rotation_staff
-                for c in OFF_SET
+                for c in off_set
                 if _key(s.id, day.date, c) in x
             ]
             if off_vars or fixed_off:
@@ -322,11 +339,13 @@ def _add_daily_limits(
 def _add_holiday_no_white(
     model: cp_model.CpModel, x: Xmap, staff, days,
     locked_holiday_cells: set[tuple],
+    rr: RuntimeRules,
 ):
-    """No '白' on holiday-like days for rotation staff.
+    """兜底班不可出現在假日（週六/週日/國定），輪班人員限定。
 
     Locked holiday cells are exempt (their code is already locked to something else).
     """
+    fallback = rr.fallback_code
     for day in days:
         if not is_holiday_like(day):
             continue
@@ -335,7 +354,7 @@ def _add_holiday_no_white(
                 continue
             if (s.id, day.date) in locked_holiday_cells:
                 continue
-            v = x.get(_key(s.id, day.date, '白'))
+            v = x.get(_key(s.id, day.date, fallback))
             if v is not None:
                 model.add(v == 0)
 
@@ -363,6 +382,7 @@ def _add_user_constraints(
     constraints: dict[str, dict[str, str]],
     locked_holiday_cells: set[tuple],
     day_dow: dict[str, int],
+    rr: RuntimeRules | None = None,
 ):
     """Lock user-specified preferences.
 
@@ -390,9 +410,10 @@ def _add_user_constraints(
                     if v is not None:
                         model.add(v == 1)
                 else:           # Weekday → any OFF code
+                    off_set = rr.off_set if rr else set()
                     off_vars = [
                         x[_key(staff_id, date, c)]
-                        for c in OFF_SET
+                        for c in off_set
                         if _key(staff_id, date, c) in x
                     ]
                     if off_vars:
@@ -471,6 +492,7 @@ def _build_objective(
 
 def _extract_solution(
     solver: cp_model.CpSolver, x: Xmap, staff, days, draft: Draft,
+    rr: RuntimeRules,
     constraints: Optional[dict] = None,
 ) -> dict[str, dict[str, Optional[str]]]:
     result: dict[str, dict[str, Optional[str]]] = {}
@@ -489,7 +511,7 @@ def _extract_solution(
                 row[day.date] = code
             else:
                 assigned: Optional[str] = None
-                for c in ALL_CODES:
+                for c in rr.all_codes:
                     v = x.get(_key(s.id, day.date, c))
                     if v is not None and solver.value(v) == 1:
                         assigned = c
@@ -522,6 +544,11 @@ def repair_schedule(req: RepairRequest) -> RepairResponse:
     days        = schedule.days
     draft       = schedule.assignments
 
+    # ------------------------------------------------------------------
+    # 0. 建立 RuntimeRules（從 shift_config 或預設值）
+    # ------------------------------------------------------------------
+    rr = build_runtime_rules(req.shift_config)
+
     user_locked: set[tuple] = {
         (s_id, date)
         for s_id, d_map in constraints.items()
@@ -549,7 +576,7 @@ def repair_schedule(req: RepairRequest) -> RepairResponse:
     # ------------------------------------------------------------------
     x: Xmap = {}
     for s in rotation_staff:
-        allowed = _allowed_codes_for(s)
+        allowed = _allowed_codes_for(s, rr)
         for day in days:
             leave_requested = constraints.get(s.id, {}).get(day.date) == '請'
             domain = []
@@ -575,17 +602,17 @@ def repair_schedule(req: RepairRequest) -> RepairResponse:
     # ------------------------------------------------------------------
     # 2b. Hard constraints (rotation staff only)
     # ------------------------------------------------------------------
-    _add_sequence_constraints(model, x, rotation_staff, days, locked_holiday_cells)
-    _add_max_consecutive(model, x, rotation_staff, days)
-    _add_weekly_quota(model, x, rotation_staff, days, draft, rotation_holiday_locks)
+    _add_sequence_constraints(model, x, rotation_staff, days, locked_holiday_cells, rr)
+    _add_max_consecutive(model, x, rotation_staff, days, rr)
+    _add_weekly_quota(model, x, rotation_staff, days, draft, rotation_holiday_locks, rr)
     _add_monthly_guo_quota(model, x, rotation_staff, days)
-    _add_no_guo_rule(model, x, rotation_staff, days)
-    _add_daily_coverage(model, x, rotation_staff, days)
-    _add_forbidden(model, x, rotation_staff, days, locked_holiday_cells)
-    _add_daily_limits(model, x, rotation_staff, days, staff, draft, constraints)
-    _add_holiday_no_white(model, x, rotation_staff, days, locked_holiday_cells)
+    _add_no_guo_rule(model, x, rotation_staff, days, rr)
+    _add_daily_coverage(model, x, rotation_staff, days, rr)
+    _add_forbidden(model, x, rotation_staff, days, locked_holiday_cells, rr)
+    _add_daily_limits(model, x, rotation_staff, days, staff, draft, constraints, rr)
+    _add_holiday_no_white(model, x, rotation_staff, days, locked_holiday_cells, rr)
     _add_rest_star_sunday_only(model, x, rotation_staff, days, locked_holiday_cells)
-    _add_user_constraints(model, x, constraints, locked_holiday_cells, day_dow)
+    _add_user_constraints(model, x, constraints, locked_holiday_cells, day_dow, rr)
 
     # ------------------------------------------------------------------
     # 3. Objective
@@ -601,7 +628,7 @@ def repair_schedule(req: RepairRequest) -> RepairResponse:
             draft_code = row.get(day.date)
             if not draft_code:
                 continue
-            for c in _allowed_codes_for(s):
+            for c in _allowed_codes_for(s, rr):
                 v = x.get(_key(s.id, day.date, c))
                 if v is not None:
                     model.add_hint(v, 1 if c == draft_code else 0)
@@ -619,7 +646,7 @@ def repair_schedule(req: RepairRequest) -> RepairResponse:
 
     diagnostics: list[dict] = []
     if status_code in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        assignments = _extract_solution(solver, x, staff, days, draft, constraints)
+        assignments = _extract_solution(solver, x, staff, days, draft, rr, constraints)
         if status == 'TIMEOUT':
             diagnostics.append({
                 'type': 'solver-timeout', 'staffId': None, 'name': None, 'date': None,

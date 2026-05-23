@@ -1729,3 +1729,126 @@ body.resizing-name-col * {
 .violations p { margin: 0; }
 .violations ul { margin: 0; padding-left: 18px; }
 .violations li { margin: 3px 0; }
+
+/* ─── Shift Config Modal ─── */
+.shift-config-modal-body {
+  width: 820px;
+  max-width: 96vw;
+}
+.sc-tabs {
+  display: flex; gap: 2px;
+  padding: 10px 18px 0;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--panel-soft);
+}
+.sc-tab-btn {
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-soft);
+  position: relative; bottom: -1px;
+}
+.sc-tab-btn.active {
+  background: white;
+  border-color: var(--border-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+.sc-modal-content { padding: 16px 18px; }
+
+/* 班別列表 */
+.sc-shifts-wrap { display: flex; flex-direction: column; gap: 4px; }
+.sc-shift-row {
+  display: grid;
+  grid-template-columns: 64px 1fr 80px 200px 48px 80px;
+  gap: 6px; align-items: center;
+}
+.sc-shift-header {
+  font-size: 12px; color: var(--text-faint); font-weight: 600;
+  padding-bottom: 4px; border-bottom: 1px solid var(--border-soft);
+}
+.sc-shift-row input, .sc-shift-row select {
+  width: 100%; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 4px 6px; box-sizing: border-box;
+}
+.sc-shift-row input:disabled, .sc-shift-row select:disabled {
+  background: var(--bg); color: var(--text-faint);
+}
+.sc-compound { display: flex; gap: 4px; align-items: center; }
+.sc-rq { flex: 1; }
+.sc-wc { flex: 1; }
+.sc-ops { display: flex; gap: 4px; justify-content: flex-end; }
+.sc-default-label { font-size: 11px; color: var(--text-faint); }
+.sc-add-btn {
+  margin-top: 10px;
+  padding: 6px 12px; font-size: 13px;
+  border: 1px dashed var(--border); border-radius: 6px;
+  background: transparent; cursor: pointer; color: var(--text-soft);
+  align-self: flex-start;
+}
+.sc-add-btn:hover { background: var(--bg); color: var(--text); }
+.sc-del-btn {
+  padding: 3px 8px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; cursor: pointer; color: var(--danger, #c00);
+}
+.sc-del-btn:hover { background: oklch(0.97 0.01 20); }
+
+/* 每日需求 */
+.sc-section { margin-bottom: 20px; }
+.sc-section-title { font-size: 14px; font-weight: 600; margin: 0 0 8px; color: var(--text); }
+.sc-req-row {
+  display: flex; gap: 8px; align-items: center;
+  margin-bottom: 6px; font-size: 13px;
+}
+.sc-req-code { flex: 1; max-width: 200px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; }
+.sc-req-count { width: 56px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; text-align: center; }
+
+/* 接班規則 */
+.sc-seq-block { margin-bottom: 20px; padding: 12px; border: 1px solid var(--border-soft); border-radius: 8px; }
+.sc-seq-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.sc-del-rule { margin-left: auto; }
+.sc-seq-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.sc-seq-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 99px; font-size: 13px;
+}
+.sc-tag-rm { background: none; border: none; cursor: pointer; color: var(--text-faint); font-size: 14px; padding: 0 2px; line-height: 1; }
+.sc-tag-rm:hover { color: var(--danger, #c00); }
+.sc-seq-add { display: inline-flex; gap: 4px; align-items: center; }
+.sc-seq-input { width: 80px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; }
+.sc-seq-sel { padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; cursor: pointer; }
+.sc-tag-add { padding: 3px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; background: transparent; }
+.sc-seq-hint { font-size: 12px; color: var(--text-faint); margin: 4px 0 0; }
+.sc-seq-add-rule { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.sc-seq-rule-sel { padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; cursor: pointer; min-width: 200px; }
+
+/* 派班優先 */
+.sc-priority-list { list-style: decimal inside; padding: 0; margin: 0; }
+.sc-priority-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border: 1px solid var(--border-soft); border-radius: 6px;
+  margin-bottom: 4px; font-size: 13px; background: var(--panel-soft);
+}
+.sc-pri-btn {
+  margin-left: auto; padding: 2px 8px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; cursor: pointer;
+}
+.sc-pri-btn:disabled { opacity: 0.3; cursor: default; }
+
+/* 重設按鈕 */
+.sc-reset-btn {
+  margin-right: auto;
+  padding: 6px 12px; font-size: 13px;
+  border: 1px solid oklch(0.65 0.1 20); border-radius: 6px;
+  background: transparent; cursor: pointer;
+  color: oklch(0.45 0.1 20);
+}
+.sc-reset-btn:hover { background: oklch(0.97 0.01 20); }
