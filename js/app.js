@@ -148,9 +148,10 @@
     });
     document.getElementById('btn-auto-fill').addEventListener('click', async () => {
       const btn = document.getElementById('btn-auto-fill');
-      const originalText = btn.textContent;
+      const stepLabel = btn.querySelector('.step-label');
+      const originalLabel = stepLabel ? stepLabel.textContent : null;
       btn.disabled = true;
-      btn.textContent = '排班中…';
+      if (stepLabel) stepLabel.textContent = '排班中…';
       try {
         const res = await fetch('http://localhost:8000/api/repair', {
           method: 'POST',
@@ -184,7 +185,7 @@
         alert('CP-SAT 後端連線失敗，請確認伺服器是否執行中。');
       } finally {
         btn.disabled = false;
-        btn.textContent = originalText;
+        if (stepLabel && originalLabel !== null) stepLabel.textContent = originalLabel;
       }
       normalizeAllCircleBalance();
       state.showRuleIssues = true;
@@ -852,14 +853,22 @@
       'solver-timeout': '求解超時',
     };
 
+    // 分類顯示順序：無解/衝突/鬆弛置頂，其餘按出現順序
+    const GROUP_ORDER = [
+      '無解', '衝突約束', '鬆弛模式', '鬆弛模式被迫違反', '鬆弛模式無解', '求解超時',
+    ];
     const groups = new Map();
     errs.forEach(e => {
       const label = CATEGORY_LABEL[e.type] || '其他';
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label).push(e);
     });
+    const sortedGroups = [
+      ...GROUP_ORDER.filter(l => groups.has(l)).map(l => [l, groups.get(l)]),
+      ...Array.from(groups.entries()).filter(([l]) => !GROUP_ORDER.includes(l)),
+    ];
 
-    const groupsHtml = Array.from(groups.entries()).map(([label, items]) =>
+    const groupsHtml = sortedGroups.map(([label, items]) =>
       `<div class="violations-group">` +
       `<div class="violations-group-header">${escapeHtml(label)}<span class="violations-group-count">${items.length}</span></div>` +
       `<ul>${items.map(e => `<li>${escapeHtml(e.msg)}</li>`).join('')}</ul>` +
