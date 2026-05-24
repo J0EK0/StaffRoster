@@ -314,6 +314,25 @@ const Validator = (() => {
         holders[key].push(s);
       });
 
+      // 額外檢查：工作班別必須出現在當日 DAILY_REQS 內（off 班不受限）
+      // 跳過：固定班員工（白/R/門 等專責人員）、fallback（平日白斑由 holiday-no-white 另管）
+      const fallback = (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager.getFallbackCode)
+        ? ShiftConfigManager.getFallbackCode() : '白';
+      staff.forEach(s => {
+        if (s.fixedShift) return;
+        const c = getCode(assignments, s.id, d.date);
+        if (!c) return;
+        if (isOff(c)) return;
+        if (c === fallback) return;
+        const key = workCode(c);
+        if (key in reqMap) return;
+        errs.push({
+          type:'illegal-shift-on-day',
+          staffId:s.id, name:s.name, date:d.date,
+          msg:`${s.name} ${d.date} (${DOW_LABEL[d.dow]}${d.isHoliday?'/國':''}) 排了「${c}」，但該日班別需求不包含「${key}」`
+        });
+      });
+
       Object.entries(reqMap).forEach(([req, requiredCount]) => {
         const n = count[req] || 0;
         if (n < requiredCount) {
