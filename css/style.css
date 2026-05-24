@@ -296,23 +296,23 @@ button.primary:active {
   user-select: none;
 }
 
-/* 只有 active 那一步：文字白色，背景由滑動指示器提供 */
+/* active 那一步：跟 step-primary 一樣自帶背景，不依賴滑動 indicator */
 .workflow-steps .step.step-active {
-  background: transparent;
+  background: linear-gradient(180deg, oklch(0.58 0.16 255), var(--accent));
   color: #fff;
-  border-color: transparent;
-  box-shadow: none;
+  border-color: var(--accent);
+  box-shadow: 0 1px 0 oklch(1 0 0 / 0.25) inset, 0 3px 8px oklch(0.45 0.18 260 / 0.22);
   font-weight: 600;
 }
 .workflow-steps .step.step-active:hover {
-  background: transparent;
+  background: linear-gradient(180deg, var(--accent), var(--accent-hover));
   color: #fff;
-  border-color: transparent;
 }
 .workflow-steps .step.step-active .step-num {
   background: oklch(1 0 0 / 0.22);
   border-color: oklch(1 0 0 / 0.18);
   color: #fff;
+  flex-shrink: 0;
 }
 
 /* ─── + 新增人員 row（表尾）─── */
