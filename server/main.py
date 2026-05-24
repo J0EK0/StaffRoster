@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from models import RepairRequest, RepairResponse
-from solver import repair_schedule
+from solver import repair_schedule, repair_schedule_relaxed
 
 app = FastAPI(title="StaffRoster CP-SAT Solver")
 
@@ -26,6 +26,16 @@ app.add_middleware(
 async def repair(req: RepairRequest) -> RepairResponse:
     try:
         return repair_schedule(req)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/repair/relaxed", response_model=RepairResponse)
+async def repair_relaxed(req: RepairRequest) -> RepairResponse:
+    """Slack-mode rescue. Use only after /api/repair returns INFEASIBLE +
+    the user explicitly opts in via the violations drawer button."""
+    try:
+        return repair_schedule_relaxed(req)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
