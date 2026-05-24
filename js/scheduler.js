@@ -324,8 +324,8 @@ const Scheduler = (() => {
       if (workCode(prev) === 'N') return false;
     }
 
-    // E/3 接續：前一天若是 E/3，今天只能是白名單內
-    if (dayIdx > 0) {
+    // E/3 接續：前一天若是 E/3，今天只能是白名單內（off 永遠允許，與 isAllowedAfter 一致）
+    if (dayIdx > 0 && !isOff(code)) {
       const prev = assignments[s.id][days[dayIdx-1].date];
       if (workCode(prev) === 'E' && !['7','E'].includes(workCode(code))) return false;
       if (workCode(prev) === '3' && !['7','3'].includes(workCode(code))) return false;
@@ -337,8 +337,8 @@ const Scheduler = (() => {
       if (!isAllowedAfterShift(wc, nxt)) return false;
     }
 
-    // 隔日已 N，今日非 N 工作班 → 違反 N 前置（這條保留為絕對硬，避免後續修不回來）
-    if (workCode(code) !== 'N' && dayIdx < days.length - 1) {
+    // 隔日已 N，今日非 N 工作班 → 違反 N 前置（off 允許，與後端 _add_sequence_constraints 一致）
+    if (workCode(code) !== 'N' && !isOff(code) && dayIdx < days.length - 1) {
       const nxt = assignments[s.id][days[dayIdx+1].date];
       if (workCode(nxt) === 'N') return false;
     }
