@@ -41,6 +41,74 @@
     return parts.join('；');
   }
 
+  // 第一週硬性休/例衝突：使用者偏好在當週平日填工作班太多，且週六/週日也填工作班，
+  // 導致 休/例 週配額無法滿足。回傳 Set<staffId|date>，標記要警示的格子。
+  function computeFirstWeekPrefConflicts(st) {
+    const conflicts = new Set();
+    const days = (st && st.days) || [];
+    if (!days.length) return conflicts;
+    // 第一週 = 月初到首個週日（含）
+    let endIdx = days.findIndex(d => d.dow === 0);
+    if (endIdx < 0) endIdx = days.length - 1;
+    const week = days.slice(0, endIdx + 1);
+    if (!week.length) return conflicts;
+
+    const target休 = week.filter(d => d.dow === 6).length;
+    const target例 = week.filter(d => d.dow === 0).length;
+    // 國定假日也需配額（國），且不重複計入週六/週日
+    const target國 = week.filter(d => d.isHoliday && d.dow !== 0 && d.dow !== 6).length;
+    const restNeed = target休 + target例 + target國;
+    if (restNeed <= 0) return conflicts;
+
+    const isRestCode = c => c === '休' || c === '例' || c === '國' || c === '休*';
+    const fallback = (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager.getFallbackCode)
+      ? ShiftConfigManager.getFallbackCode() : '白';
+    const isWorkPref = c => c && !isRestCode(c) && c !== '請' && c !== fallback;
+
+    const constraints = st.constraints || {};
+    const assignments = (st.schedule && st.schedule.assignments) || {};
+    const staffNames = [];
+    (st.staff || []).forEach(s => {
+      if (s.fixedShift) return;
+      const sc = constraints[s.id] || {};
+      const ac = assignments[s.id] || {};
+      const workCells = [];
+      week.forEach(d => {
+        // 平日：只算使用者主動填的偏好
+        // 假日（週六/週日）：偏好優先，沒有偏好才看底稿 assignment（白班不算）
+        const isWeekend = (d.dow === 0 || d.dow === 6);
+        const c = isWeekend ? (sc[d.date] || ac[d.date]) : sc[d.date];
+        if (isWorkPref(c)) workCells.push(d.date);
+      });
+      // 衝突：當週工作格總數 > 可工作天數（= 週天數 - 休/例需求）→ 沒地方放 休/例
+      const maxWorkAllowed = week.length - restNeed;
+      if (workCells.length > maxWorkAllowed) {
+        workCells.forEach(date => conflicts.add(`${s.id}|${date}`));
+        staffNames.push(s.name);
+      }
+    });
+    conflicts.staffNames = staffNames;
+    return conflicts;
+  }
+
+  function renderFirstWeekConflictBanner(names) {
+    const id = 'first-week-conflict-banner';
+    let el = document.getElementById(id);
+    if (!names || !names.length) {
+      if (el) el.remove();
+      return;
+    }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = id;
+      el.className = 'first-week-conflict-banner';
+      const tbl = document.getElementById('schedule-table');
+      if (tbl && tbl.parentNode) tbl.parentNode.insertBefore(el, tbl);
+    }
+    const uniq = Array.from(new Set(names));
+    el.innerHTML = `⚠ 第一週偏好衝突：<b>${uniq.join('、')}</b>（共 ${uniq.length} 位）平日填太多班 + 假日仍鎖工作偏好，會違反當週 休/例 配額，產生底稿一定報錯，請先調整。`;
+  }
+
   function renderCode(el, code) {
     if (code === '休*') {
       el.innerHTML = '<span class="rs-star">*</span><span class="rs-rest">休</span>';
@@ -530,6 +598,26 @@
     const prefsMode = document.body.classList.contains('prefs-mode');
     tbl.classList.toggle('in-prefs-mode', prefsMode);
 
+    // 第一週硬性 休/例 衝突檢查：若使用者在第一週的平日填了太多工作偏好，
+    // 同時又在週六/週日填了工作偏好，導致無法滿足當週 休/例 配額，標出衝突格。
+    const firstWeekConflictSet = computeFirstWeekPrefConflicts(state);
+    renderFirstWeekConflictBanner(firstWeekConflictSet.staffNames || []);
+
+    // 第二階段判定：底稿已產生（assignments 中存在「不是來自偏好」的非空格）
+    // 清空班表後 assignments 只剩偏好對應的格子 → hasDraft = false，視同回到第一階段
+    let hasDraft = false;
+    {
+      const cs = state.constraints || {};
+      const as = (state.schedule && state.schedule.assignments) || {};
+      outer: for (const sid in as) {
+        const row = as[sid] || {};
+        const prefRow = cs[sid] || {};
+        for (const date in row) {
+          if (row[date] && row[date] !== prefRow[date]) { hasDraft = true; break outer; }
+        }
+      }
+    }
+
     // 員工列
     state.staff.forEach((s, rowIdx) => {
       const tr = document.createElement('tr');
@@ -599,15 +687,30 @@
         else if (d.dow === 0) td.classList.add('cell-sun');
         else if (d.dow === 6) td.classList.add('cell-sat');
         let code = state.schedule.assignments[s.id] ? state.schedule.assignments[s.id][d.date] : null;
+        const pref = state.constraints[s.id] && state.constraints[s.id][d.date];
         // 偏好模式：只顯示有設過偏好的格子，其餘全部空白
         if (prefsMode) {
-          const pref = state.constraints[s.id] && state.constraints[s.id][d.date];
           code = pref || null;
           if (pref) td.classList.add('pref-marked');
         }
         if (code) {
           td.classList.add(`shift-${code}`);
           renderCode(td, code);
+        }
+        // 非偏好模式 + 已產生底稿：若有使用者偏好，疊加顯示（藍色 = 使用者填的班別）
+        if (!prefsMode && hasDraft && pref) {
+          td.classList.add('has-pref');
+          const prefEl = document.createElement('span');
+          prefEl.className = 'pref-overlay';
+          prefEl.textContent = pref;
+          prefEl.title = `使用者填：${pref}${code && code !== pref ? `，底稿：${code}` : ''}`;
+          td.insertBefore(prefEl, td.firstChild);
+        }
+        // 第一週硬性 休/例 衝突標記（任一階段都顯示，提早提醒使用者）
+        if (firstWeekConflictSet.has(`${s.id}|${d.date}`)) {
+          td.classList.add('first-week-conflict');
+          const prevTitle = td.title || '';
+          td.title = (prevTitle ? prevTitle + '\n' : '') + '第一週衝突：平日填太多班且假日仍要上班，無法滿足當週休/例配額';
         }
         td.dataset.staffId = s.id;
         td.dataset.date = d.date;
@@ -838,6 +941,7 @@
       'wrong-國-quota': '月配額',
       'no-guo': '國定假日',
       'short-coverage': '每日覆蓋', 'duplicate-coverage': '每日覆蓋',
+      'illegal-shift-on-day': '每日覆蓋',
       'too-many-leave': '請假限額', 'too-many-weekday-off': '平日限額',
       'holiday-white': '假日白班',
       'circle-invalid-staff': '圓圈班', 'circle-invalid-day': '圓圈班',

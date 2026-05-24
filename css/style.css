@@ -359,6 +359,56 @@ button.primary:active {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/* 非偏好模式：使用者偏好疊加在底稿格子上（藍字 = 使用者想要的） */
+#schedule-table tbody td.shift-cell.has-pref {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  position: relative;
+}
+#schedule-table tbody td.shift-cell .pref-overlay {
+  color: #2563eb;
+  font-size: 0.78em;
+  font-weight: 600;
+  margin-right: 2px;
+  opacity: 0.95;
+}
+
+/* 第一週衝突 banner */
+.first-week-conflict-banner {
+  margin: 8px 16px 0;
+  padding: 10px 14px;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-left: 4px solid #dc2626;
+  border-radius: 6px;
+  color: #991b1b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.first-week-conflict-banner b { color: #7f1d1d; }
+
+/* 第一週硬性休/例衝突：紅色虛線外框 + 角標 */
+#schedule-table tbody td.shift-cell.first-week-conflict {
+  box-shadow: inset 0 0 0 2px #dc2626;
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(220, 38, 38, 0.08) 0,
+    rgba(220, 38, 38, 0.08) 4px,
+    transparent 4px,
+    transparent 8px
+  );
+  position: relative;
+}
+#schedule-table tbody td.shift-cell.first-week-conflict::after {
+  content: "!";
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  font-size: 0.7em;
+  font-weight: 700;
+  color: #dc2626;
+  line-height: 1;
+}
+
 /* ─── 偏好階段 banner（表格上方提示條） ─── */
 .prefs-banner {
   display: flex;
