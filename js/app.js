@@ -12,6 +12,7 @@
     customHolidays: {},     // { date: name }
     rotation: null,         // { weekday: { staffId: { date: code } }, regular/national: { _order, staffId: { date: code } } }
     showRuleIssues: false,
+    lastSolverStatus: null,  // 'OPTIMAL' | 'FEASIBLE' | 'INFEASIBLE' | 'TIMEOUT' | null
   };
   // STAT_CODES 在 init() 後由 buildStatCodes() 動態產生
   let STAT_CODES = ['N','E','3','7','1','2','中','△','A','◎','休*','休','例','國'];
@@ -165,8 +166,16 @@
         const data = await res.json();
         state.schedule.assignments = data.assignments;
         state.schedule.diagnostics = data.diagnostics || [];
+        state.lastSolverStatus = data.status;
         if (data.status === 'INFEASIBLE') {
-          alert('CP-SAT 無法找到可行排班。請檢查偏好或禁忌班設定。');
+          // 把後端回傳的 IIS 衝突清單寫入 violations drawer，並自動展開 drawer
+          // 讓使用者看到衝突清單 + 「強制排出鬆弛解」按鈕。
+          state.showRuleIssues = true;
+          const drawer = document.getElementById('violations-drawer');
+          if (drawer) {
+            drawer.classList.remove('hidden');
+            drawer.setAttribute('aria-hidden', 'false');
+          }
         } else if (data.status === 'TIMEOUT') {
           alert(`求解超時，回傳目前最佳可行解（${data.solve_time_ms} ms）`);
         }
@@ -183,6 +192,42 @@
       saveSchedule();
       render();
     });
+
+    // 鬆弛解按鈕（B path）：使用者看完 IIS 衝突清單後決定強制排出
+    async function runRelaxedRepair() {
+      const btn = document.getElementById('btn-run-relaxed');
+      if (btn) { btn.disabled = true; btn.dataset.originalText = btn.textContent; btn.textContent = '鬆弛求解中…'; }
+      try {
+        const res = await fetch('http://localhost:8000/api/repair/relaxed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            schedule: state.schedule,
+            staff: state.staff,
+            constraints: state.constraints,
+            shift_config: ShiftConfigManager.toApiPayload(),
+          }),
+        });
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        const data = await res.json();
+        state.schedule.assignments = data.assignments;
+        state.schedule.diagnostics = data.diagnostics || [];
+        state.lastSolverStatus = data.status;
+        if (data.status === 'INFEASIBLE') {
+          alert('鬆弛模式仍無解：使用者鎖定 / 禁忌班 等不可違反規則直接衝突。');
+        }
+      } catch (err) {
+        console.error('Relaxed repair error:', err);
+        alert('鬆弛求解後端連線失敗，請確認伺服器是否執行中。');
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = btn.dataset.originalText || '強制排出鬆弛解'; }
+      }
+      normalizeAllCircleBalance();
+      state.showRuleIssues = true;
+      saveSchedule();
+      render();
+    }
+    window.runRelaxedRepair = runRelaxedRepair;
     const ruleBtnEl = document.getElementById('btn-check-rules');
     if (ruleBtnEl) ruleBtnEl.addEventListener('click', () => { runRuleCheck(); });
     window.runRuleCheck = runRuleCheck;
@@ -796,6 +841,15 @@
       'holiday-white': '假日白班',
       'circle-invalid-staff': '圓圈班', 'circle-invalid-day': '圓圈班',
       'draft-no-candidate': '排班診斷',
+      // CP-SAT 後端回傳的衝突 / 鬆弛診斷
+      'solver-infeasible': '無解',
+      'solver-infeasible-iis': '無解',
+      'iis-conflict': '衝突約束',
+      'iis-unavailable': '無解',
+      'slack-rescue-summary': '鬆弛模式',
+      'slack-violated': '鬆弛模式被迫違反',
+      'slack-infeasible': '鬆弛模式無解',
+      'solver-timeout': '求解超時',
     };
 
     const groups = new Map();
@@ -812,8 +866,23 @@
       `</div>`
     ).join('');
 
+    // 若上一次 CP-SAT 回傳 INFEASIBLE，顯示「強制排出鬆弛解」按鈕讓使用者觸發 B 路徑
+    const hasIIS = state.lastSolverStatus === 'INFEASIBLE'
+      || rawErrs.some(e => e.type === 'iis-conflict' || e.type === 'solver-infeasible-iis' || e.type === 'solver-infeasible');
+    const rescueBtnHtml = hasIIS
+      ? `<div class="violations-rescue-bar">
+           <button id="btn-run-relaxed" type="button" class="btn-rescue">強制排出鬆弛解</button>
+           <span class="rescue-hint">允許犧牲部分軟性規則來產出班表，被犧牲的規則會列在下方。</span>
+         </div>`
+      : '';
+
     box.classList.remove('hidden');
-    box.innerHTML = `<h4>規則違規 (${errs.length} 項)</h4>${groupsHtml}`;
+    box.innerHTML = `<h4>規則違規 (${errs.length} 項)</h4>${rescueBtnHtml}${groupsHtml}`;
+
+    const rescueBtn = document.getElementById('btn-run-relaxed');
+    if (rescueBtn && typeof window.runRelaxedRepair === 'function') {
+      rescueBtn.addEventListener('click', () => window.runRelaxedRepair());
+    }
     return rawErrs;
   }
 

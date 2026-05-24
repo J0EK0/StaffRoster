@@ -652,6 +652,34 @@ body.prefs-mode main { padding-right: 320px; transition: padding .24s ease; }
   border-color: oklch(0.85 0.08 155);
   color: oklch(0.35 0.10 155);
 }
+.drawer-body .violations-rescue-bar {
+  background: oklch(0.97 0.04 80);
+  border: 1px solid oklch(0.85 0.12 80);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.drawer-body .violations-rescue-bar .btn-rescue {
+  align-self: flex-start;
+  background: oklch(0.62 0.18 30);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.drawer-body .violations-rescue-bar .btn-rescue:hover { background: oklch(0.55 0.20 30); }
+.drawer-body .violations-rescue-bar .btn-rescue:disabled { opacity: 0.5; cursor: wait; }
+.drawer-body .violations-rescue-bar .rescue-hint {
+  font-size: 11px;
+  color: oklch(0.45 0.05 60);
+  line-height: 1.4;
+}
 .drawer-body .violations-group {
   margin-bottom: 10px;
 }
