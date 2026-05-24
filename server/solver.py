@@ -527,6 +527,45 @@ def _add_daily_coverage(
                     ct.only_enforce_if(gate)
 
 
+def _add_disallowed_work_codes(
+    model: cp_model.CpModel, x: Xmap, staff, days,
+    locked_holiday_cells: set[tuple],
+    rr: RuntimeRules,
+    reg: ConstraintRegistry,
+):
+    """每日只能出現該日 DAILY_REQS 列出的工作班別。
+    例：假日不可出現 7/△/A/3/門 等平日專屬班。
+    off 班（休/例/國/請）不受此限；休* 由 _add_rest_star_sunday_only 另外處理；
+    fallback（白）由 _add_holiday_no_white 另外處理。
+    """
+    for day in days:
+        req_count = rr.day_requirements_count(day.dow, day.isHoliday)
+        allowed_eff = set(req_count.keys())
+        if not allowed_eff:
+            continue
+        for s in staff:
+            if is_fixed_staff(s):
+                continue
+            if (s.id, day.date) in locked_holiday_cells:
+                continue
+            for c in rr.work_codes:
+                if c == rr.fallback_code:
+                    continue  # 由 holiday-no-white 處理
+                eff = rr.effective_work_code(c)
+                if eff in allowed_eff:
+                    continue
+                v = x.get(_key(s.id, day.date, c))
+                if v is None:
+                    continue
+                gate = reg.gate(
+                    category='daily-coverage', staff_id=s.id, date=day.date,
+                    msg=f'{s.name} {day.date} 不可排「{c}」（該日班別不在需求清單）',
+                )
+                ct = model.add(v == 0)
+                if gate is not None:
+                    ct.only_enforce_if(gate)
+
+
 def _add_forbidden(
     model: cp_model.CpModel, x: Xmap, staff, days,
     locked_holiday_cells: set[tuple],
@@ -885,6 +924,7 @@ def _build_model(req: RepairRequest, mode: str = 'hard') -> _ModelCtx:
     _add_weekly_quota(model, x, rotation_staff, days, draft, rotation_holiday_locks, rr, reg)
     _add_monthly_guo_quota(model, x, rotation_staff, days, reg)        # S6: hard monthly 國
     _add_daily_coverage(model, x, rotation_staff, days, rr, reg)
+    _add_disallowed_work_codes(model, x, rotation_staff, days, locked_holiday_cells, rr, reg)
     _add_forbidden(model, x, rotation_staff, days, locked_holiday_cells, rr, reg)
     _add_daily_limits(model, x, rotation_staff, days, staff, draft, constraints, rr, reg)
     _add_holiday_no_white(model, x, rotation_staff, days, locked_holiday_cells, rr, reg)
