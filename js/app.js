@@ -205,6 +205,7 @@
         window.PrefsStage.setActive(false);
       }
       Scheduler.initPatternDraft(state.schedule, state.staff, state.constraints, state.rotation);
+      state.schedule.stage = 'draft';
       normalizeAllCircleBalance();
       state.showRuleIssues = true;
       if (window.Stepper) window.Stepper.mark('draft');
@@ -247,6 +248,9 @@
           }
         } else if (data.status === 'TIMEOUT') {
           alert(`求解超時，回傳目前最佳可行解（${data.solve_time_ms} ms）`);
+          state.schedule.stage = 'final';
+        } else {
+          state.schedule.stage = 'final';
         }
       } catch (err) {
         console.error('CP-SAT server error:', err);
@@ -284,6 +288,8 @@
         state.lastSolverStatus = data.status;
         if (data.status === 'INFEASIBLE') {
           alert('鬆弛模式仍無解：使用者鎖定 / 禁忌班 等不可違反規則直接衝突。');
+        } else {
+          state.schedule.stage = 'final';
         }
       } catch (err) {
         console.error('Relaxed repair error:', err);
