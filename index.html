@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>護理單位排班系統</title>
-<link rel="stylesheet" href="css/style.css?v=40">
+<link rel="stylesheet" href="css/style.css?v=42">
 </head>
 <body style="background-color: rgb(255, 255, 255)">
 
@@ -24,10 +24,9 @@
     <button id="btn-init-draft" class="step"><span class="step-num">2</span><span class="step-label">產生底稿</span></button>
     <span class="step-arrow">›</span>
     <button id="btn-auto-fill" class="step"><span class="step-num">3</span><span class="step-label">下一步修班</span></button>
-    <span class="step-arrow">›</span>
-    <button id="btn-export" class="step"><span class="step-num">4</span><span class="step-label">匯出 Excel</span></button>
   </div>
   <div class="actions">
+    <button id="btn-export" class="btn-export-action" type="button" title="匯出 Excel">⬇ 匯出 Excel</button>
     <button id="btn-rotation-modal" type="button" title="設定排班底稿">底稿</button>
     <button id="btn-violations-chip" class="violations-chip chip-idle" type="button" title="規則狀態（自動檢查）"><span class="chip-dot"></span><span class="chip-label">規則未檢查</span></button>
     <div class="more-menu">
@@ -179,6 +178,15 @@
       </div>
     </div>
 
+    <div class="tweak-section">
+      <div class="tweak-label">偏好標記</div>
+      <div class="tweak-hint">藍色框線與偏好字樣，可在確認底稿後暫時隱藏</div>
+      <div class="seg" data-tweak="pref">
+        <button data-value="show">顯示</button>
+        <button data-value="hide">隱藏</button>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -191,10 +199,10 @@
 <script src="js/constraints.js?v=41"></script>
 <script src="js/validator.js?v=41"></script>
 <script src="js/scheduler.js?v=41"></script>
-<script src="js/export.js?v=41"></script>
-<script src="js/app.js?v=41"></script>
+<script src="js/export.js?v=45"></script>
+<script src="js/app.js?v=42"></script>
 <script src="js/tweaks.js?v=41"></script>
-<script src="js/ui-extras.js?v=41"></script>
+<script src="js/ui-extras.js?v=42"></script>
 <script src="js/prefs-stage.js?v=41"></script>
 <script src="js/shift-config-ui.js?v=41"></script>
 </body>

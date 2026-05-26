@@ -318,8 +318,7 @@
       render();
     });
     document.getElementById('btn-export').addEventListener('click', () => {
-      Exporter.exportXlsx(state.schedule, state.staff);
-      if (window.Stepper) window.Stepper.mark('export');
+      Exporter.exportXlsx(state.schedule, state.staff, state.constraints);
     });
   }
 
