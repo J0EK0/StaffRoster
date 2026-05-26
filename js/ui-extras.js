@@ -82,8 +82,7 @@
   const STEPS = {
     prefs: 'btn-set-prefs',
     draft: 'btn-init-draft',
-    repair: 'btn-auto-fill',
-    export: 'btn-export'
+    repair: 'btn-auto-fill'
   };
   let currentStep = null;
   const indicator = document.querySelector('.workflow-steps .step-indicator');
@@ -135,7 +134,7 @@
     });
   }
 
-  window.Stepper = { mark };
+  window.Stepper = { mark, getStep: () => currentStep };
 
   // ── 新增人員按鈕（位於表格底端）──
   document.addEventListener('click', (e) => {

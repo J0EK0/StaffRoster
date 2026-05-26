@@ -372,6 +372,17 @@ button.primary:active {
   opacity: 0.95;
 }
 
+/* tw-pref-hide：隱藏所有偏好標記（藍框 + 偏好文字） */
+.tw-pref-hide #schedule-table tbody td.shift-cell.pref-marked {
+  box-shadow: none;
+}
+.tw-pref-hide #schedule-table tbody td.shift-cell.has-pref {
+  box-shadow: none;
+}
+.tw-pref-hide #schedule-table tbody td.shift-cell .pref-overlay {
+  display: none;
+}
+
 /* 第一週衝突 banner */
 .first-week-conflict-banner {
   margin: 8px 16px 0;
@@ -809,6 +820,25 @@ select:focus-visible {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+.btn-export-action {
+  background: linear-gradient(180deg, oklch(0.58 0.16 255), var(--accent));
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow:
+    0 1px 0 oklch(1 0 0 / 0.25) inset,
+    0 1px 2px oklch(0.25 0.18 260 / 0.20);
+  font-weight: 600;
+  padding: 5px 13px;
+}
+.btn-export-action:hover {
+  background: linear-gradient(180deg, var(--accent), var(--accent-hover));
+  border-color: var(--accent-hover);
+  color: #fff;
+  box-shadow:
+    0 1px 0 oklch(1 0 0 / 0.25) inset,
+    0 3px 8px oklch(0.45 0.18 260 / 0.22);
 }
 
 /* ─── 圖例列 ─── */

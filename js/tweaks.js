@@ -5,7 +5,8 @@
     "color": "none",
     "density": "standard",
     "white": "full",
-    "weekend": "subtle"
+    "weekend": "subtle",
+    "pref": "show"
   }/*EDITMODE-END*/;
 
   const TWEAK_DOMAINS = {
@@ -13,6 +14,7 @@
     density: ['compact', 'standard', 'roomy'],
     white: ['full', 'faded', 'hidden'],
     weekend: ['subtle', 'strong'],
+    pref: ['show', 'hide'],
   };
 
   function load() {
