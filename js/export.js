@@ -124,7 +124,7 @@ const Exporter = (() => {
       const draft = parts.join(' ');
       if (!draft || !constraint) return m;
       anyReplaced = true;
-      const col1 = (draft === '休' || draft === '例') ? 'FFB91C1C' : 'FF1D2433';
+      const col1 = (constraint === '請' && (draft === '休' || draft === '例')) ? 'FFB91C1C' : 'FF1D2433';
       const col2 = constraint === '請' ? 'FFC0392B' : 'FF1D4ED8';
       return '<si>' +
         '<r><rPr><b/><color rgb="' + col1 + '"/></rPr><t xml:space="preserve">' + xe(draft) + '</t></r>' +
@@ -232,7 +232,12 @@ const Exporter = (() => {
     const colorMode  = PALETTES[tweaks.color] ? tweaks.color : 'none';
     const palette    = PALETTES[colorMode];
     const cons       = constraints || readConstraints(year, month);
-    const isDraft    = detectHasDraft(assignments, cons);
+    const prefsMode  = typeof document !== 'undefined' && document.body.classList.contains('prefs-mode');
+    const showPrefs  = tweaks.pref !== 'hide';
+    const stage      = schedule.stage || '';
+    const hasDraft   = !prefsMode && detectHasDraft(assignments, cons);
+    const exportMode = prefsMode ? 'prefs' : (stage === 'final' ? 'final' : (stage === 'draft' || hasDraft ? 'draft' : 'final'));
+    const includePrefs = showPrefs && (exportMode === 'draft' || exportMode === 'final');
 
     const HOLIDAY_HEADER_FILL = 'FECACA';
     const HOLIDAY_BODY_FILL   = 'FEE2E2';
@@ -254,8 +259,9 @@ const Exporter = (() => {
     dowRow.push('');
     aoa.push(dowRow);
 
-    // richMap: 記錄哪些「底稿\n偏好」組合需要 rich text，供後續 ZIP 修補
+    // richMap: 記錄哪些「底稿 偏好」組合需要 rich text，供後續 ZIP 修補
     const richMap = new Map();
+    const prefOnlyCells = new Set();
 
     staff.forEach(s => {
       const row   = [s.name];
@@ -280,23 +286,27 @@ const Exporter = (() => {
         if (stats[code] !== undefined) stats[code]++;
       };
 
-      days.forEach(d => {
-        let c = assignments[s.id] ? (assignments[s.id][d.date] || '') : '';
-        if (hideWhite && c === '白') c = '';
-
+      days.forEach((d, dayIdx) => {
+        const rawDraft = assignments[s.id] ? (assignments[s.id][d.date] || '') : '';
         const rawConstraint = (cons[s.id] && cons[s.id][d.date]) || '';
-        const constraint = (hideWhite && rawConstraint === '白') ? '' : rawConstraint;
+        const draft = (hideWhite && rawDraft === '白') ? '' : rawDraft;
+        const constraint = rawConstraint;
+        const c = exportMode === 'prefs' ? constraint : draft;
 
-        if (isDraft && c && constraint && constraint !== c) {
-          // 底稿 + 偏好都存在且不同 → 放複合字串，稍後 ZIP 修補為 rich text
+        if (includePrefs && draft && constraint) {
+          // 目前排班/底稿 + 偏好都存在 → 放複合字串，稍後 ZIP 修補為 rich text
           const combined = c + ' ' + constraint;
           row.push(combined);
           richMap.set(combined, true);
+        } else if (includePrefs && !draft && constraint) {
+          // 白班被隱藏時仍保留偏好，例如「白 + 請」輸出為紅色「請」
+          prefOnlyCells.add(`${aoa.length}|${dayIdx + 1}`);
+          row.push(constraint);
         } else {
           row.push(c);
         }
 
-        addShiftStats(c);  // 統計永遠用底稿
+        addShiftStats(c);  // 統計使用目前匯出的內容
         if (c && !OFF_CODES.includes(c)) workC++;
       });
 
@@ -309,7 +319,7 @@ const Exporter = (() => {
 
     // 欄寬
     ws['!cols'] = [{ wch: 10 }];
-    for (let i = 0; i < days.length; i++) ws['!cols'].push({ wch: isDraft ? 5 : 4 });
+    for (let i = 0; i < days.length; i++) ws['!cols'].push({ wch: includePrefs ? 5 : 4 });
     for (let i = 0; i < STAT_CODES.length + 1; i++) ws['!cols'].push({ wch: 5 });
 
     ws['!freeze'] = { xSplit: 1, ySplit: 2 };
@@ -347,19 +357,22 @@ const Exporter = (() => {
           const raw = String(cell.v || '');
 
           // rich text 格子（底稿 + 偏好）：底色用底稿班別色
-          const isRich = isDraft && richMap.has(raw);
+          const isRich = includePrefs && richMap.has(raw);
+          const isPrefOnly = prefOnlyCells.has(`${R}|${C}`);
           const displayCode = isRich ? raw.split(' ')[0] : raw;
           const fillRgb = palette.fill[displayCode];
           const fontRgb = palette.font[displayCode];
 
           if (raw) {
             const style = {
-              font:      isRich
+              font:      (isRich || isPrefOnly)
                 ? { bold: true }
                 : { bold: true, color: { rgb: isHoliday ? HOLIDAY_TEXT : (fontRgb || '1D2433') } },
               alignment: { horizontal: 'center', vertical: 'center' }
             };
-            if (fillRgb)       style.fill = { fgColor: { rgb: fillRgb } };
+            if (isPrefOnly) {
+              style.font.color = { rgb: raw === '請' ? 'C0392B' : '1D4ED8' };
+            } else if (fillRgb) style.fill = { fgColor: { rgb: fillRgb } };
             else if (isHoliday) style.fill = { fgColor: { rgb: HOLIDAY_BODY_FILL } };
             cell.s = style;
           } else if (isHoliday) {
@@ -375,10 +388,10 @@ const Exporter = (() => {
     const sheetName = `${year}-${String(month).padStart(2, '0')}`;
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
 
-    const suffix   = isDraft ? '_底稿' : '';
+    const suffix   = exportMode === 'prefs' ? '_偏好' : (exportMode === 'draft' ? '_底稿' : '');
     const filename = `班表_${year}-${String(month).padStart(2, '0')}${suffix}.xlsx`;
 
-    if (isDraft && richMap.size > 0) {
+    if (includePrefs && richMap.size > 0) {
       // 輸出 Uint8Array → ZIP 修補 sharedStrings.xml → blob 下載
       const raw = XLSX.write(wb, { bookType: 'xlsx', cellStyles: true, bookSST: true, type: 'array' });
       const patched = patchRichTextInZip(new Uint8Array(raw), richMap);
