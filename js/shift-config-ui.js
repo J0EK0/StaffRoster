@@ -69,7 +69,7 @@ const ShiftConfigUI = (() => {
 
     // 表頭
     const header = el('div', 'sc-shift-row sc-shift-header');
-    ['代碼','名稱','種類','複合班（消耗配額/算作）','兜底','操作'].forEach(h => {
+    ['代碼','名稱','種類','複合班（消耗配額/算作）','兜底','OC平日','OC假日','操作'].forEach(h => {
       header.appendChild(el('span', '', h));
     });
     wrap.appendChild(header);
@@ -96,13 +96,23 @@ const ShiftConfigUI = (() => {
   function buildShiftRow(s, idx) {
     const row = el('div', 'sc-shift-row' + (s.isDefault ? ' sc-default' : ''));
 
-    // 代碼
+    // 代碼（內建班別也可改；改 code 時自動同步所有引用）
+    let prevCode = s.code;
     const codeInput = el('input');
     codeInput.value = s.code;
     codeInput.placeholder = '例：早';
     codeInput.maxLength = 3;
-    codeInput.disabled = s.isDefault;
     codeInput.addEventListener('input', () => { s.code = codeInput.value.trim(); });
+    codeInput.addEventListener('change', () => {
+      const next = codeInput.value.trim();
+      s.code = next;
+      if (next && next !== prevCode) {
+        renameCodeRefs(prevCode, next);
+        prevCode = next;
+        // 重繪：複合班「算作」、每日需求等顯示需同步
+        renderTab('shifts');
+      }
+    });
     row.appendChild(codeInput);
 
     // 名稱
@@ -112,7 +122,7 @@ const ShiftConfigUI = (() => {
     labelInput.addEventListener('input', () => { s.label = labelInput.value; });
     row.appendChild(labelInput);
 
-    // 種類
+    // 種類（內建班別也可改）
     const kindSel = el('select');
     [['work','工作班'],['off','休假班']].forEach(([v, t]) => {
       const o = el('option', '', t);
@@ -120,8 +130,7 @@ const ShiftConfigUI = (() => {
       if (s.kind === v) o.selected = true;
       kindSel.appendChild(o);
     });
-    kindSel.disabled = s.isDefault;
-    kindSel.addEventListener('change', () => { s.kind = kindSel.value; });
+    kindSel.addEventListener('change', () => { s.kind = kindSel.value; renderTab('shifts'); });
     row.appendChild(kindSel);
 
     // 複合班（restQuota / workCode）
@@ -162,21 +171,64 @@ const ShiftConfigUI = (() => {
     });
     row.appendChild(fbRadio);
 
-    // 操作
+    // OC 統計歸屬（平日 / 假日）
+    const ocWd = document.createElement('input');
+    ocWd.type = 'checkbox';
+    ocWd.className = 'sc-oc';
+    ocWd.checked = !!s.ocWeekday;
+    ocWd.addEventListener('change', () => { s.ocWeekday = ocWd.checked; });
+    row.appendChild(ocWd);
+
+    const ocHd = document.createElement('input');
+    ocHd.type = 'checkbox';
+    ocHd.className = 'sc-oc';
+    ocHd.checked = !!s.ocHoliday;
+    ocHd.addEventListener('change', () => { s.ocHoliday = ocHd.checked; });
+    row.appendChild(ocHd);
+
+    // 操作（內建班別也可刪除，由使用者自行決定）
     const ops = el('span', 'sc-ops');
-    if (!s.isDefault) {
-      const delBtn = el('button', 'sc-del-btn', '刪除');
-      delBtn.addEventListener('click', () => {
-        _working.shifts.splice(idx, 1);
-        renderTab('shifts');
-      });
-      ops.appendChild(delBtn);
-    } else {
-      ops.appendChild(el('span', 'sc-default-label', '內建'));
-    }
+    const delBtn = el('button', 'sc-del-btn', '刪除');
+    delBtn.addEventListener('click', () => {
+      _working.shifts.splice(idx, 1);
+      renderTab('shifts');
+    });
+    ops.appendChild(delBtn);
     row.appendChild(ops);
 
     return row;
+  }
+
+  // 改某班別代碼時，同步更新所有引用（接班規則 / 派班優先 / 每日需求 / 複合班 workCode）
+  function renameCodeRefs(oldCode, newCode) {
+    if (!oldCode || oldCode === newCode) return;
+
+    // 接班規則：key 與 allowedAfter 內容
+    const rules = _working.sequenceRules || {};
+    if (rules[oldCode]) {
+      rules[newCode] = rules[oldCode];
+      delete rules[oldCode];
+    }
+    Object.values(rules).forEach(r => {
+      if (Array.isArray(r.allowedAfter)) {
+        r.allowedAfter = r.allowedAfter.map(c => (c === oldCode ? newCode : c));
+      }
+    });
+
+    // 派班優先
+    if (Array.isArray(_working.draftPriority)) {
+      _working.draftPriority = _working.draftPriority.map(c => (c === oldCode ? newCode : c));
+    }
+
+    // 每日需求
+    Object.values(_working.dailyReqs || {}).forEach(entries => {
+      (entries || []).forEach(e => { if (e.code === oldCode) e.code = newCode; });
+    });
+
+    // 複合班「算作」其他班別
+    _working.shifts.forEach(sh => {
+      if (sh.workCode === oldCode) sh.workCode = newCode;
+    });
   }
 
   // ------------------------------------------------------------------
@@ -344,9 +396,39 @@ const ShiftConfigUI = (() => {
   // ------------------------------------------------------------------
   // Tab 4：派班優先順序
   // ------------------------------------------------------------------
+
+  // 讓 draftPriority 與目前班別/每日需求保持同步：
+  //   - 移除已不存在或非「每日需求工作班」的代碼（含刪除後殘留的未知班別）
+  //   - 補進尚未列入的每日需求工作班（新增班別後可被排序）
+  // 只涵蓋會出現在每日需求中的工作班，因為派班優先只用來排序這些班別。
+  function reconcileDraftPriority() {
+    const wm = workingShiftMap();
+    const reqWorkCodes = [];
+    const seen = new Set();
+    Object.values(_working.dailyReqs || {}).forEach(entries => {
+      (entries || []).forEach(e => {
+        const def = wm[e.code];
+        if (def && def.kind === 'work' && !seen.has(e.code)) {
+          seen.add(e.code);
+          reqWorkCodes.push(e.code);
+        }
+      });
+    });
+    const valid = new Set(reqWorkCodes);
+    _working.draftPriority = (_working.draftPriority || []).filter(c => valid.has(c));
+    const present = new Set(_working.draftPriority);
+    reqWorkCodes.forEach(c => { if (!present.has(c)) _working.draftPriority.push(c); });
+  }
+
   function renderPriorityTab(container) {
+    reconcileDraftPriority();
     const list = el('ol', 'sc-priority-list');
     const priority = _working.draftPriority;
+
+    if (priority.length === 0) {
+      container.appendChild(el('p', 'sc-seq-hint', '目前每日需求沒有工作班，無可排序項目。請先到「每日需求」設定。'));
+      return;
+    }
 
     priority.forEach((code, idx) => {
       const item = el('li', 'sc-priority-item');
@@ -404,6 +486,8 @@ const ShiftConfigUI = (() => {
       alert('有班別代碼或名稱為空，請填寫後再儲存');
       return;
     }
+    // 派班優先與目前班別/每日需求對齊（補進新班別、移除未知班別殘留）
+    reconcileDraftPriority();
     ShiftConfigManager.save(_working);
 
     // 通知 app.js 重新初始化（重建 STAT_CODES 等）

@@ -28,9 +28,40 @@
     '花花': '平日 (一~五) 工作班且非白班的班別總數',
     'OC':   'On Call：平日 7/E/N/△；假日 1/2/E/N/休*',
   };
-  const OC_WEEKDAY = new Set(['7','E','N','△']);
-  const OC_HOLIDAY = new Set(['1','2','E','N','休*']);
-  const isFlowerShift = code => Boolean(code) && WORK_CODES.includes(code) && code !== '白';
+  // OC 歸屬改吃班別設定（ShiftConfigManager），不再寫死代碼
+  const isOcWeekday = code => Boolean(code) && ShiftConfigManager.isOcWeekday(code);
+  const isOcHoliday = code => Boolean(code) && ShiftConfigManager.isOcHoliday(code);
+  // 花花：平日工作班且非兜底班（白），改吃動態 work codes / fallback
+  const isFlowerShift = code =>
+    Boolean(code) &&
+    ShiftConfigManager.getWorkCodes().includes(code) &&
+    code !== ShiftConfigManager.getFallbackCode();
+
+  // 取某日的需求 [{code, count}]（吃班別設定），向下相容舊的 string[] 來源
+  function dayRequirementEntries(dow, isHoliday) {
+    if (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager._config) {
+      return ShiftConfigManager.getDayRequirements(dow, isHoliday);
+    }
+    return dayRequirements(dow, isHoliday).map(code => ({ code, count: 1 }));
+  }
+
+  // 依需求人數（含 count>1）與實際 count 對照，回傳 {missing, duplicate} 兩組 code
+  function diffDayRequirements(reqEntries, count) {
+    const reqMap = {};
+    reqEntries.forEach(e => {
+      const c = typeof e === 'string' ? e : e.code;
+      const n = typeof e === 'string' ? 1 : (e.count || 1);
+      reqMap[c] = (reqMap[c] || 0) + n;
+    });
+    const missing = [];
+    const duplicate = [];
+    Object.entries(reqMap).forEach(([code, need]) => {
+      const have = count[code] || 0;
+      if (have < need) missing.push(code);
+      else if (have > need) duplicate.push(code);
+    });
+    return { missing, duplicate, reqMap };
+  }
 
   function formatRequirementIssues(missing, duplicate, count) {
     const parts = [];
@@ -761,7 +792,7 @@
     reqTr.appendChild(reqLabel);
 
     state.days.forEach(d => {
-      const reqs = dayRequirements(d.dow, d.isHoliday);
+      const reqEntries = dayRequirementEntries(d.dow, d.isHoliday);
       const count = {};
       state.staff.forEach(s => {
         const c = state.schedule.assignments[s.id] ? state.schedule.assignments[s.id][d.date] : null;
@@ -770,13 +801,12 @@
           count[key] = (count[key]||0) + 1;
         }
       });
-      const missing = reqs.filter(r => (count[r]||0) < 1);
-      const duplicate = reqs.filter(r => (count[r]||0) > 1);
+      const { missing, duplicate, reqMap } = diffDayRequirements(reqEntries, count);
       const td = document.createElement('td');
       if (missing.length === 0 && duplicate.length === 0) {
         td.className = 'req-ok';
         td.textContent = '✓';
-        td.title = `齊：${reqs.join(',')}`;
+        td.title = `齊：${Object.keys(reqMap).join(',')}`;
       } else {
         td.className = 'req-fail';
         td.textContent = '✗';
@@ -852,10 +882,10 @@
       const base = effectiveWorkCode(c);
       if (isHolidayLike) {
         if (c && (!OFF_CODES.includes(c) || c === '休*')) out['假日']++;
-        if (c && (OC_HOLIDAY.has(base) || c === '休*')) out['OC']++;
+        if (isOcHoliday(c) || isOcHoliday(base)) out['OC']++;
       } else {
         if (isFlowerShift(c)) out['花花']++;
-        if (c && OC_WEEKDAY.has(base)) out['OC']++;
+        if (isOcWeekday(c) || isOcWeekday(base)) out['OC']++;
       }
     });
     return out;
@@ -1021,8 +1051,10 @@
     const pop = document.getElementById('shift-popover');
     pop.innerHTML = '';
 
-    const work = SHIFT_DEFS.filter(s => s.kind === 'work');
-    const off  = SHIFT_DEFS.filter(s => s.kind === 'off');
+    // 從 ShiftConfigManager 取動態班別（含使用者新增/刪除/改名），不再讀靜態 SHIFT_DEFS
+    const shifts = ShiftConfigManager.getShifts();
+    const work = shifts.filter(s => s.kind === 'work');
+    const off  = shifts.filter(s => s.kind === 'off');
 
     [...work, ...off].forEach(s => {
       const b = document.createElement('button');
@@ -1194,9 +1226,8 @@
     else groupData._inactive[staffMember.id] = true;
   }
 
+  // openRotationPopover 的後備預設（正常呼叫都會帶入動態 statCodes）
   const ROT_CODES = ['E', '中', 'N', '1', '2', '休*'];
-  const WEEKDAY_ROT_CODES = ['1', '中', '2', 'A', '3', '7', 'E', 'N', '△'];
-  const WEEKDAY_QUICK_PATTERN = ['1', '中', '2', 'A', '3', '7', 'E', 'N', '△'];
   const HOLIDAY_ORDER_PRESET_VERSION = 'holiday-order-20260513-v1';
   const DEFAULT_HOLIDAY_ROTATION_ORDER = [
     'linyh',     // 林意惠
@@ -1300,7 +1331,7 @@
           if (code) seedPattern.push({ offset: idx, code });
         });
       } else {
-        WEEKDAY_QUICK_PATTERN.forEach((code, idx) => {
+        ShiftConfigManager.getDayRequirementsCodes(1, false).forEach((code, idx) => {
           if (code) seedPattern.push({ offset: idx, code });
         });
       }
@@ -1461,11 +1492,20 @@
     // Stats helper
     const hasSunday = days.some(d => d.dow === 0);
     const hasNonSunday = days.some(d => d.dow !== 0);
+    // 班別清單改吃班別設定的每日需求（含使用者新增班別），不再寫死
+    const rotCodesFor = (dow, isHol) =>
+      ShiftConfigManager.getDayRequirements(dow, isHol).map(e => e.code);
     const statCodes = isWeekdayDraft
-      ? WEEKDAY_ROT_CODES
+      ? [...new Set(rotCodesFor(1, false))]
       : isNational
-      ? [...(hasNonSunday ? ['E','中','N','1','2'] : []), ...(hasSunday ? ['休*'] : [])]
-      : ROT_CODES;
+      ? [...new Set([
+          ...(hasNonSunday ? rotCodesFor(2, true) : []),
+          ...(hasSunday ? rotCodesFor(0, false) : []),
+        ])]
+      : [...new Set([
+          ...(hasNonSunday ? rotCodesFor(6, false) : []),
+          ...(hasSunday ? rotCodesFor(0, false) : []),
+        ])];
     function computeRotStats(staffId) {
       const out = {};
       statCodes.forEach(c => { out[c] = 0; });
@@ -1616,7 +1656,9 @@
           if (!isDraftStaffActive(groupData, s)) return;
           if (quickFill.active) {
             if (quickFill.dayDate !== d.date) { quickFill.dayDate = d.date; quickFill.idx = 0; }
-            const seq = isWeekdayDraft ? WEEKDAY_QUICK_PATTERN : (d.dow === 0 ? ['休*','N','E','1'] : ['中','E','N','1','2']);
+            const seq = ShiftConfigManager.getDayRequirementsCodes(
+              d.dow, isWeekdayDraft ? false : d.isHoliday
+            );
             if (quickFill.idx < seq.length) {
               const code = seq[quickFill.idx];
               if (code) {
@@ -1662,7 +1704,7 @@
     days.forEach(d => {
       const td = document.createElement('td');
       td.className = 'rot-req-cell';
-      const needed = dayRequirements(d.dow, isWeekdayDraft ? false : d.isHoliday);
+      const needed = dayRequirementEntries(d.dow, isWeekdayDraft ? false : d.isHoliday);
       const count = {};
       let filled = 0;
       currentActiveStaff().forEach(s => {
@@ -1671,8 +1713,7 @@
         count[c] = (count[c] || 0) + 1;
         filled++;
       });
-      const missing = needed.filter(c => !count[c]);
-      const duplicate = needed.filter(c => (count[c] || 0) > 1);
+      const { missing, duplicate } = diffDayRequirements(needed, count);
       if (missing.length === 0 && duplicate.length === 0 && filled > 0) {
         td.textContent = '✓';
         td.classList.add('rot-req-ok');
@@ -1709,7 +1750,7 @@
       days.forEach((d, di) => {
         const td = reqCells[di];
         if (!td) return;
-        const needed = dayRequirements(d.dow, isWeekdayDraft ? false : d.isHoliday);
+        const needed = dayRequirementEntries(d.dow, isWeekdayDraft ? false : d.isHoliday);
         const count = {};
         let filled = 0;
         currentActiveStaff().forEach(s => {
@@ -1718,8 +1759,7 @@
           count[c] = (count[c] || 0) + 1;
           filled++;
         });
-        const missing = needed.filter(c => !count[c]);
-        const duplicate = needed.filter(c => (count[c] || 0) > 1);
+        const { missing, duplicate } = diffDayRequirements(needed, count);
         td.className = 'rot-req-cell';
         if (missing.length === 0 && duplicate.length === 0 && filled > 0) {
           td.textContent = '✓'; td.classList.add('rot-req-ok'); td.title = '';
@@ -1739,7 +1779,7 @@
     codes.forEach(code => {
       const b = document.createElement('button');
       renderCode(b, code);
-      b.title = (SHIFT_MAP[code] && SHIFT_MAP[code].label) || code;
+      b.title = (ShiftConfigManager.getShiftMap()[code] && ShiftConfigManager.getShiftMap()[code].label) || code;
       b.className = `shift-${code}`;
       b.addEventListener('click', () => {
         if (!groupData[staff.id]) groupData[staff.id] = {};
