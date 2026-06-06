@@ -46,7 +46,12 @@ const Constraints = (() => {
     const forbidden = new Set(staff.forbidden || []);
     const fixed = staff.fixedShift;
 
-    const options = SHIFT_DEFS
+    // 班別清單改吃動態設定（ShiftConfigManager），讓自訂班別也能在個人限制中選用
+    const allShifts = ShiftConfigManager.getShifts();
+    const shiftMap  = ShiftConfigManager.getShiftMap();
+    const offCodes  = ShiftConfigManager.getOffCodes();
+
+    const options = allShifts
       .filter(s => !forbidden.has(s.code) && !forbidden.has(effectiveWorkCode(s.code)))
       .map(s => `<option value="${s.code}">${s.code} (${s.label})</option>`)
       .join('');
@@ -63,11 +68,11 @@ const Constraints = (() => {
       <label><input type="checkbox" id="ck-fixed-shift" ${fixed?'checked':''}> 全月固定班別：</label>
       <select id="sel-fixed-shift" ${fixed?'':'disabled'}>
         <option value="">--選擇--</option>
-        ${SHIFT_DEFS.filter(s=>!isCircleShiftCode(s.code)).map(s=>`<option value="${s.code}" ${fixed===s.code?'selected':''}>${s.code} (${s.label})</option>`).join('')}
+        ${allShifts.filter(s=>!isCircleShiftCode(s.code)).map(s=>`<option value="${s.code}" ${fixed===s.code?'selected':''}>${s.code} (${s.label})</option>`).join('')}
       </select>
       <br>
       <label>禁忌班別（不可被排）：</label>
-      ${SHIFT_DEFS.filter(s=>s.kind==='work' && !isRestWorkCode(s.code) && !isCircleShiftCode(s.code)).map(s=>
+      ${allShifts.filter(s=>s.kind==='work' && !isRestWorkCode(s.code) && !isCircleShiftCode(s.code)).map(s=>
         `<label><input type="checkbox" class="ck-forbid" value="${s.code}" ${(staff.forbidden||[]).includes(s.code)?'checked':''}> ${s.code}</label>`
       ).join('')}
     </div>`;
@@ -88,10 +93,9 @@ const Constraints = (() => {
         <select data-date="${d.date}" class="sel-day">
           <option value="">-</option>
           ${options}
-          ${forbidden.size ? SHIFT_DEFS.filter(s=>forbidden.has(s.code)).map(s=>'').join('') : ''}
-          ${OFF_CODES.filter(c=>!options.includes(`value="${c}"`)).map(c=>{
-            const def = SHIFT_MAP[c];
-            return `<option value="${c}">${c} (${def.label})</option>`;
+          ${offCodes.filter(c=>!options.includes(`value="${c}"`)).map(c=>{
+            const def = shiftMap[c];
+            return `<option value="${c}">${c} (${def ? def.label : c})</option>`;
           }).join('')}
         </select>
       </div>`;
