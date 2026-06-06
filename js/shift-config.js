@@ -15,6 +15,12 @@ const ShiftConfigManager = (() => {
   let _shiftMap = {};   // code → shift def（自己維護，不用 data.js 的 SHIFT_MAP）
   let _offSet = new Set();
   let _specialWorkCodesSet = new Set();  // 在 dailyReqs 裡出現過的 work code
+  let _ocWeekdaySet = new Set();         // 平日算入 OC 統計的 code
+  let _ocHolidaySet = new Set();         // 假日算入 OC 統計的 code
+
+  // 內建預設的 OC 統計歸屬（向下相容舊行為）
+  const DEFAULT_OC_WEEKDAY = ['7', 'E', 'N', '△'];
+  const DEFAULT_OC_HOLIDAY = ['1', '2', 'E', 'N', '休*'];
 
   // ------------------------------------------------------------------
   // 預設值：從 data.js 的 SHIFT_DEFS / DAILY_REQS 產生（向下相容）
@@ -29,8 +35,10 @@ const ShiftConfigManager = (() => {
         restQuota:  d.restQuota  || null,
         workCode:   d.workCode   || null,
         circle:     d.circle     || false,
-        isDefault:  true,   // 內建班別不可刪、不可改 code
+        isDefault:  true,   // 標記為內建（供「重設預設值」與樣式使用，不再鎖定編輯）
         isFallback: d.code === '白',
+        ocWeekday:  DEFAULT_OC_WEEKDAY.includes(d.code),
+        ocHoliday:  DEFAULT_OC_HOLIDAY.includes(d.code),
       })),
       dailyReqs: {
         weekday:  DAILY_REQS.weekday.map( c => ({ code: c, count: 1 })),
@@ -60,6 +68,10 @@ const ShiftConfigManager = (() => {
     Object.values(cfg.dailyReqs).forEach(entries => {
       entries.forEach(e => _specialWorkCodesSet.add(e.code));
     });
+
+    // OC 統計歸屬（平日 / 假日）
+    _ocWeekdaySet = new Set(cfg.shifts.filter(s => s.ocWeekday).map(s => s.code));
+    _ocHolidaySet = new Set(cfg.shifts.filter(s => s.ocHoliday).map(s => s.code));
   }
 
   // ------------------------------------------------------------------
@@ -163,6 +175,10 @@ const ShiftConfigManager = (() => {
 
   function getDraftPriority() { return _config.draftPriority || []; }
 
+  /** OC 統計：平日 / 假日是否算入（吃班別設定，預設沿用舊行為） */
+  function isOcWeekday(code) { return _ocWeekdaySet.has(code); }
+  function isOcHoliday(code) { return _ocHolidaySet.has(code); }
+
   /**
    * toApiPayload() → snake_case 格式的 shift_config，供 fetch body 使用
    */
@@ -205,6 +221,8 @@ const ShiftConfigManager = (() => {
     effectiveWorkCode,
     isAllowedAfter,
     getDraftPriority,
+    isOcWeekday,
+    isOcHoliday,
     toApiPayload,
     // 內部 _config 供 shift-config-ui.js 存取（讀取用）
     get _config() { return _config; },

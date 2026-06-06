@@ -1872,9 +1872,10 @@ body.resizing-name-col * {
 .sc-shifts-wrap { display: flex; flex-direction: column; gap: 4px; }
 .sc-shift-row {
   display: grid;
-  grid-template-columns: 64px 1fr 80px 200px 48px 80px;
+  grid-template-columns: 64px 1fr 80px 200px 48px 48px 48px 80px;
   gap: 6px; align-items: center;
 }
+.sc-shift-row .sc-oc { width: auto; justify-self: center; }
 .sc-shift-header {
   font-size: 12px; color: var(--text-faint); font-weight: 600;
   padding-bottom: 4px; border-bottom: 1px solid var(--border-soft);
