@@ -482,10 +482,6 @@ const Scheduler = (() => {
   // Init 底稿：人工式斜對角 pattern，先看節奏，再進下一步修班
   // ============================================================
 
-  const WEEKDAY_PATTERN = ['7', 'E', null, 'N', null, '△', '2', null, null, 'A', null, null, '3', '中', '1', null];
-  const HOLIDAY_PATTERN = ['中', 'E', 'N', '1', '2'];
-  const SUNDAY_PATTERN = ['休*', 'N', 'E', '1'];
-
   function ensureAssignmentShape(assignments, staff, days) {
     staff.forEach(s => {
       if (!assignments[s.id]) assignments[s.id] = {};
@@ -499,58 +495,10 @@ const Scheduler = (() => {
     return staff.some(s => days.some(d => assignments[s.id] && assignments[s.id][d.date]));
   }
 
-  function dayHasCode(assignments, staff, dateKey, code) {
-    return staff.some(s => assignments[s.id] && assignments[s.id][dateKey] === code);
-  }
-
   function isPresetBlankForDay(code, day) {
     if (code === null || code === undefined) return true;
     if (isWeekday(day)) return code === ShiftConfigManager.getFallbackCode();
     return isOff(code);
-  }
-
-  function pickPatternStaff(assignments, rotStaff, day, idealIdx, assigned, locked, code, days, dayIdx) {
-    if (rotStaff.length === 0) return null;
-    const wc = code ? workCode(code) : null;
-    // Sequence checks only apply on holiday/weekend days: weekday violations are fixable by repair.
-    const isHolidayDay = day.rotationGroup === 'regular' || day.rotationGroup === 'national';
-    for (let step = 0; step < rotStaff.length; step++) {
-      const s = rotStaff[(idealIdx + step) % rotStaff.length];
-      if (assigned.has(s.id)) continue;
-      if (isLocked(locked, s.id, day.date)) continue;
-      if (!isPresetBlankForDay(assignments[s.id][day.date], day)) continue;
-      if (code && ((s.forbidden || []).includes(code) || (s.forbidden || []).includes(wc))) continue;
-      if (isHolidayDay && days && dayIdx > 0) {
-        const prevDate = days[dayIdx - 1].date;
-        const prevCode = assignments[s.id][prevDate];
-        const prevWc = prevCode ? workCode(prevCode) : null;
-        if (wc === 'N' && prevCode !== null && !isOff(prevCode) && prevWc !== 'N') continue;
-        if (prevWc && code && !isAllowedAfterShift(prevWc, code)) continue;
-      }
-      return s;
-    }
-    return null;
-  }
-
-  function placePatternCode(assignments, staff, rotStaff, day, baseOffset, patternIdx, code, assigned, locked, days, dayIdx) {
-    if (!code) return null;
-    if (rotStaff.length === 0) return null;
-    if (dayHasCode(assignments, staff, day.date, code)) return null;
-    const chosen = pickPatternStaff(
-      assignments,
-      rotStaff,
-      day,
-      (baseOffset + patternIdx) % rotStaff.length,
-      assigned,
-      locked,
-      code,
-      days,
-      dayIdx
-    );
-    if (!chosen) return null;
-    assignments[chosen.id][day.date] = code;
-    assigned.add(chosen.id);
-    return chosen;
   }
 
   function activeDraftStaffForGroup(staff, groupData) {
@@ -579,9 +527,6 @@ const Scheduler = (() => {
   }
 
   function fillPatternDraft(assignments, staff, days, locked, rotation) {
-    let weekdayOffset = 0;
-    let holidayOffset = 0;
-
     days.forEach((day, dayIdx) => {
       const assigned = new Set();
 
@@ -600,6 +545,7 @@ const Scheduler = (() => {
         const weekdayStaff = activeDraftStaffForGroup(staff, weekdayData);
         const hasWeekdayData = weekdayData && weekdayStaff.some(s => weekdayData[s.id] && weekdayData[s.id][day.date]);
 
+        // 有輪值資料才套用；沒有資料就維持白班底（不再用寫死節奏自動抓人上班）
         if (hasWeekdayData) {
           weekdayStaff.forEach(s => {
             const code = weekdayData[s.id] && weekdayData[s.id][day.date];
@@ -608,12 +554,7 @@ const Scheduler = (() => {
               assigned.add(s.id);
             }
           });
-        } else {
-          WEEKDAY_PATTERN.forEach((code, idx) => {
-            placePatternCode(assignments, staff, weekdayStaff, day, weekdayOffset, idx, code, assigned, locked, days, dayIdx);
-          });
         }
-        weekdayOffset = (weekdayOffset + 1) % Math.max(weekdayStaff.length, 1);
       } else {
         const offCode = defaultOffCode(day);
         staff.forEach(s => {
@@ -650,12 +591,7 @@ const Scheduler = (() => {
             assigned.add(s.id);
           });
         }
-        // Always run pattern fill: fills skipped slots (forbidden/sequence) and no-data days alike.
-        const pattern = (day.dow === 0) ? SUNDAY_PATTERN : HOLIDAY_PATTERN;
-        pattern.forEach((code, idx) => {
-          placePatternCode(assignments, staff, holidayStaff, day, holidayOffset, idx, code, assigned, locked, days, dayIdx);
-        });
-        holidayOffset = (holidayOffset + 1) % Math.max(holidayStaff.length, 1);
+        // 有輪值資料才套用；沒有資料就維持休/例/國 底（不再用寫死節奏自動抓人上班）
       }
     });
   }

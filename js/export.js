@@ -1,44 +1,21 @@
 // Excel 匯出 (使用 SheetJS)
 
 const Exporter = (() => {
-  const STAT_CODES = ['N','E','3','7','1','2','中','△','A','◎','休*','休','例','國'];
-
-  const PALETTES = {
-    vivid: {
-      fill: {
-        'N':'1E3A8A','E':'3B82F6','3':'60A5FA','7':'93C5FD',
-        '1':'FDE68A','2':'FCD34D','中':'FBBF24','△':'F97316',
-        'A':'C084FC','R':'A855F7','門':'F472B6','白':'E5E7EB','休*':'34D399',
-        '休N':'1E3A8A','休E':'3B82F6','◎':'A855F7',
-        '休':'CBD5E1','例':'94A3B8','國':'F87171','請':'FCD9B6'
-      },
-      font: {
-        'N':'FFFFFF','E':'FFFFFF','3':'FFFFFF','7':'1D2433',
-        '1':'1D2433','2':'1D2433','中':'1D2433','△':'FFFFFF',
-        'A':'FFFFFF','R':'FFFFFF','門':'FFFFFF','白':'1D2433','休*':'FFFFFF',
-        '休N':'FFFFFF','休E':'FFFFFF','◎':'FFFFFF',
-        '休':'1D2433','例':'FFFFFF','國':'FFFFFF','請':'1D2433'
-      }
-    },
-    pastel: {
-      fill: {
-        'N':'DDE0F2','E':'DCE5F4','3':'DCE9F4','7':'E0EBF3',
-        '1':'F1ECCB','2':'F2E6B8','中':'F3E1B3','△':'F4D6A8',
-        'A':'ECDCEF','R':'ECDFEC','門':'F1DDE3','白':'F4F4F6','休*':'D8EDDC',
-        '休N':'DDE0F2','休E':'DCE5F4','◎':'ECDFEC',
-        '休':'F5DDD4','例':'F5DDD4','國':'F5DDD4','請':'F5DDD4'
-      },
-      font: {
-        '休':'B91C1C','例':'B91C1C','國':'B91C1C','請':'B91C1C'
-      }
-    },
-    none: {
-      fill: {},
-      font: {
-        '休':'B91C1C','例':'B91C1C','國':'B91C1C','請':'B91C1C'
-      }
+  // 統計欄位改吃動態班別設定（與畫面統計欄位 app.js buildStatCodes 同邏輯）：
+  // 所有工作班（扣掉兜底白班）+ 固定休假欄（休* 休 例 國）
+  function buildStatCodes() {
+    const fixedOff = ['休*', '休', '例', '國'];
+    if (typeof ShiftConfigManager !== 'undefined' && ShiftConfigManager._config) {
+      const workStats = ShiftConfigManager.getWorkCodes()
+        .filter(c => c !== ShiftConfigManager.getFallbackCode());
+      return [...new Set([...workStats, ...fixedOff])];
     }
-  };
+    return ['N','E','3','7','1','2','中','△','A','◎','休*','休','例','國'];
+  }
+
+  // 班別配色模式（鮮豔/柔和）已移除 UI，匯出一律不上班別底色；
+  // 僅保留休假碼的紅字樣式。
+  const REST_FONT = { '休':'B91C1C', '例':'B91C1C', '國':'B91C1C', '請':'B91C1C' };
 
   // ── CRC32（ZIP 用）──
   const _crcTab = (() => {
@@ -227,10 +204,10 @@ const Exporter = (() => {
     const { year, month, days, assignments } = schedule;
     if (typeof XLSX === 'undefined') { alert('Excel 函式庫未載入，無法匯出'); return; }
 
+    const STAT_CODES = buildStatCodes();
+
     const tweaks     = readTweaks();
     const hideWhite  = tweaks.white === 'hidden';
-    const colorMode  = PALETTES[tweaks.color] ? tweaks.color : 'none';
-    const palette    = PALETTES[colorMode];
     const cons       = constraints || readConstraints(year, month);
     const prefsMode  = typeof document !== 'undefined' && document.body.classList.contains('prefs-mode');
     const showPrefs  = tweaks.pref !== 'hide';
@@ -360,8 +337,7 @@ const Exporter = (() => {
           const isRich = includePrefs && richMap.has(raw);
           const isPrefOnly = prefOnlyCells.has(`${R}|${C}`);
           const displayCode = isRich ? raw.split(' ')[0] : raw;
-          const fillRgb = palette.fill[displayCode];
-          const fontRgb = palette.font[displayCode];
+          const fontRgb = REST_FONT[displayCode];
 
           if (raw) {
             const style = {
@@ -372,8 +348,7 @@ const Exporter = (() => {
             };
             if (isPrefOnly) {
               style.font.color = { rgb: raw === '請' ? 'C0392B' : '1D4ED8' };
-            } else if (fillRgb) style.fill = { fgColor: { rgb: fillRgb } };
-            else if (isHoliday) style.fill = { fgColor: { rgb: HOLIDAY_BODY_FILL } };
+            } else if (isHoliday) style.fill = { fgColor: { rgb: HOLIDAY_BODY_FILL } };
             cell.s = style;
           } else if (isHoliday) {
             cell.s = { fill: { fgColor: { rgb: HOLIDAY_BODY_FILL } }, alignment: { horizontal: 'center', vertical: 'center' } };

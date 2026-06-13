@@ -2,7 +2,6 @@
 (function () {
   const KEY = 'roster.tweaks';
   const DEFAULTS = /*EDITMODE-BEGIN*/{
-    "color": "none",
     "density": "standard",
     "white": "full",
     "weekend": "subtle",
@@ -10,7 +9,6 @@
   }/*EDITMODE-END*/;
 
   const TWEAK_DOMAINS = {
-    color: ['none', 'pastel', 'vivid'],
     density: ['compact', 'standard', 'roomy'],
     white: ['full', 'faded', 'hidden'],
     weekend: ['subtle', 'strong'],
