@@ -155,7 +155,10 @@
   const NAME_COL_MIN_WIDTH = 128;
   const NAME_COL_MAX_WIDTH = 280;
   const NAME_COL_DEFAULT_WIDTH = 156;
-  const QUICK_FILL_CODES = ['N','E','休N','休E','◎','1','2','中','A','3','7','△','R','門','白','休','休*','例','國','請'];
+  // 快速填數 bar 的班別清單改吃動態班別設定（含使用者新增/刪除/改名），依設定順序排列
+  function getQuickFillCodes() {
+    return ShiftConfigManager.getShifts().map(s => s.code);
+  }
   let activeQuickFillCode = undefined;
 
   // ===== 初始化 =====
@@ -474,7 +477,7 @@
     if (!bar) return;
     bar.innerHTML = '';
 
-    QUICK_FILL_CODES.forEach(code => {
+    getQuickFillCodes().forEach(code => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `quick-fill-btn shift-${code}`;
@@ -1840,6 +1843,11 @@
   window.App.reinit = () => {
     ShiftConfigManager.init();
     STAT_CODES = buildStatCodes();
+    // 班別可能新增/刪除/改名，重建快速填數 bar；若當前選的班別已不存在則清掉
+    if (activeQuickFillCode != null && !getQuickFillCodes().includes(activeQuickFillCode)) {
+      activeQuickFillCode = undefined;
+    }
+    setupQuickFillToolbar();
     render();
   };
 

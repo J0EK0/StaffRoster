@@ -924,47 +924,6 @@ select:focus-visible {
 .quick-fill-btn[class~="shift-休*"] .rs-rest {
   color: #000 !important;
 }
-body.tw-color-pastel .quick-fill-btn.shift-N { background-color: oklch(0.93 0.05 260); }
-body.tw-color-pastel .quick-fill-btn.shift-E { background-color: oklch(0.94 0.05 250); }
-body.tw-color-pastel .quick-fill-btn.shift-3 { background-color: oklch(0.95 0.04 240); }
-body.tw-color-pastel .quick-fill-btn.shift-7 { background-color: oklch(0.96 0.03 230); }
-body.tw-color-pastel .quick-fill-btn.shift-1 { background-color: oklch(0.95 0.05 85); }
-body.tw-color-pastel .quick-fill-btn.shift-2 { background-color: oklch(0.94 0.06 80); }
-body.tw-color-pastel .quick-fill-btn.shift-中 { background-color: oklch(0.94 0.06 70); }
-body.tw-color-pastel .quick-fill-btn[class~="shift-△"] { background-color: oklch(0.93 0.07 55); }
-body.tw-color-pastel .quick-fill-btn.shift-A { background-color: oklch(0.93 0.05 310); }
-body.tw-color-pastel .quick-fill-btn.shift-R { background-color: oklch(0.94 0.04 320); }
-body.tw-color-pastel .quick-fill-btn.shift-門 { background-color: oklch(0.94 0.05 350); }
-body.tw-color-pastel .quick-fill-btn.shift-白 { background-color: oklch(0.97 0.003 260); color: var(--text-faint); }
-body.tw-color-pastel .quick-fill-btn.shift-休,
-body.tw-color-pastel .quick-fill-btn[class~="shift-休*"],
-body.tw-color-pastel .quick-fill-btn.shift-例,
-body.tw-color-pastel .quick-fill-btn.shift-國,
-body.tw-color-pastel .quick-fill-btn.shift-請 {
-  background-color: oklch(0.95 0.04 25);
-  color: var(--warn);
-}
-body.tw-color-vivid .quick-fill-btn.shift-N { background-color: oklch(0.32 0.12 260); color: #fff; }
-body.tw-color-vivid .quick-fill-btn.shift-E { background-color: oklch(0.55 0.17 255); color: #fff; }
-body.tw-color-vivid .quick-fill-btn.shift-3 { background-color: oklch(0.70 0.14 245); color: #fff; }
-body.tw-color-vivid .quick-fill-btn.shift-7 { background-color: oklch(0.82 0.10 235); color: oklch(0.25 0.05 260); }
-body.tw-color-vivid .quick-fill-btn.shift-1 { background-color: oklch(0.88 0.14 90); color: oklch(0.30 0.08 70); }
-body.tw-color-vivid .quick-fill-btn.shift-2 { background-color: oklch(0.82 0.16 82); color: oklch(0.28 0.09 65); }
-body.tw-color-vivid .quick-fill-btn.shift-中 { background-color: oklch(0.78 0.16 70); color: #fff; }
-body.tw-color-vivid .quick-fill-btn[class~="shift-△"] { background-color: oklch(0.68 0.18 55); color: #fff; }
-body.tw-color-vivid .quick-fill-btn.shift-A { background-color: oklch(0.72 0.16 315); color: #fff; }
-body.tw-color-vivid .quick-fill-btn.shift-R { background-color: oklch(0.62 0.18 325); color: #fff; }
-body.tw-color-vivid .quick-fill-btn.shift-門 { background-color: oklch(0.72 0.16 355); color: #fff; }
-body.tw-color-vivid .quick-fill-btn.shift-白 { background-color: oklch(0.93 0.003 260); color: var(--text-faint); }
-body.tw-color-vivid .quick-fill-btn.shift-休,
-body.tw-color-vivid .quick-fill-btn[class~="shift-休*"],
-body.tw-color-vivid .quick-fill-btn.shift-例,
-body.tw-color-vivid .quick-fill-btn.shift-國,
-body.tw-color-vivid .quick-fill-btn.shift-請 {
-  background-color: oklch(0.48 0.16 25);
-  color: #fff;
-}
-
 /* 統計欄收合切換鈕 */
 .stats-toggle {
   display: inline-flex;
@@ -1112,58 +1071,6 @@ body.tw-color-vivid .quick-fill-btn.shift-請 {
 
 /* ─── Tweak: 班別著色 ─── */
 
-/* 班別語意分群（用於 pastel / vivid） */
-/* 夜班深藍：N E 3 7 */
-/* 日間特殊琥珀：1 2 中 △ A */
-/* 固定灰：R 門 白 */
-
-/* color-mode: pastel — 淡色塊 */
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-N { background-color: oklch(0.93 0.05 260); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-E { background-color: oklch(0.94 0.05 250); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-3 { background-color: oklch(0.95 0.04 240); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-7 { background-color: oklch(0.96 0.03 230); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-1 { background-color: oklch(0.95 0.05 85); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-2 { background-color: oklch(0.94 0.06 80); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-中 { background-color: oklch(0.94 0.06 70); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell[class~="shift-△"] { background-color: oklch(0.93 0.07 55); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-A { background-color: oklch(0.93 0.05 310); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-R { background-color: oklch(0.94 0.04 320); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-門 { background-color: oklch(0.94 0.05 350); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-白 { background-color: oklch(0.97 0.003 260); }
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-休,
-body.tw-color-pastel #schedule-table tbody td.shift-cell[class~="shift-休*"],
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-例,
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-國,
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-請 { background-color: oklch(0.95 0.04 25); }
-
-/* color-mode: vivid — 飽和色塊（白字 / 深字依背景對比） */
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-N { background-color: oklch(0.32 0.12 260); color: #fff !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-E { background-color: oklch(0.55 0.17 255); color: #fff !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-3 { background-color: oklch(0.70 0.14 245); color: #fff !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-7 { background-color: oklch(0.82 0.10 235); color: oklch(0.25 0.05 260) !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-1 { background-color: oklch(0.88 0.14 90); color: oklch(0.30 0.08 70) !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-2 { background-color: oklch(0.82 0.16 82); color: oklch(0.28 0.09 65) !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-中 { background-color: oklch(0.78 0.16 70); color: #fff !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell[class~="shift-△"] { background-color: oklch(0.68 0.18 55); color: #fff !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-A { background-color: oklch(0.72 0.16 315); color: #fff !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-R { background-color: oklch(0.62 0.18 325); color: #fff !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-門 { background-color: oklch(0.72 0.16 355); color: #fff !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-白 { background-color: oklch(0.93 0.003 260); color: var(--text-faint) !important; }
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-休,
-body.tw-color-vivid #schedule-table tbody td.shift-cell[class~="shift-休*"],
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-例,
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-國,
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-請 {
-  background-color: oklch(0.55 0.20 25);
-  color: #fff !important;
-}
-
-/* hover 在彩色模式下也要看得出來 */
-body.tw-color-pastel #schedule-table tbody td.shift-cell:hover,
-body.tw-color-vivid #schedule-table tbody td.shift-cell:hover {
-  box-shadow: inset 0 0 0 2px oklch(0.45 0.18 255);
-}
-
 /* ─── Tweak: 格子節奏 ─── */
 body.tw-density-compact #schedule-table { font-size: 11px; }
 body.tw-density-compact #schedule-table tbody td.shift-cell { width: 26px; height: 22px; font-size: 11px; }
@@ -1293,19 +1200,6 @@ body.quick-fill-erasing #schedule-table tbody td.shift-cell { cursor: cell; }
 .rs-star { color: #000 !important; font-weight: 700; }
 .rs-rest { color: var(--warn) !important; font-weight: 700; }
 .rs-work { font-weight: 800; }
-
-body.tw-color-pastel .quick-fill-btn.shift-休N,
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-休N { background-color: oklch(0.93 0.05 260); }
-body.tw-color-pastel .quick-fill-btn.shift-休E,
-body.tw-color-pastel #schedule-table tbody td.shift-cell.shift-休E { background-color: oklch(0.94 0.05 250); }
-body.tw-color-pastel .quick-fill-btn[class~="shift-◎"],
-body.tw-color-pastel #schedule-table tbody td.shift-cell[class~="shift-◎"] { background-color: oklch(0.94 0.04 320); }
-body.tw-color-vivid .quick-fill-btn.shift-休N,
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-休N { background-color: oklch(0.32 0.12 260); color: #fff !important; }
-body.tw-color-vivid .quick-fill-btn.shift-休E,
-body.tw-color-vivid #schedule-table tbody td.shift-cell.shift-休E { background-color: oklch(0.55 0.17 255); color: #fff !important; }
-body.tw-color-vivid .quick-fill-btn[class~="shift-◎"],
-body.tw-color-vivid #schedule-table tbody td.shift-cell[class~="shift-◎"] { background-color: oklch(0.62 0.18 325); color: #fff !important; }
 
 /* 違規：左上角紅色三角，取代整圈 outline；不擋字 */
 #schedule-table tbody td.shift-cell.violation {
